@@ -49,6 +49,11 @@ docker compose up -d --build
 
 3. Pair using the setup code shown in `docker compose logs`.
 
+To check that the Doorbirds in your `config.json` are reachable and their users have the permissions the plugin needs (login, and "watch always" for snapshots and video), run:
+```sh
+docker exec homebridge-doorbird node /opt/homebridge/doorbird-check.js
+```
+
 The container needs host networking: HomeKit finds the bridge over mDNS and the stream uses random UDP ports. `/data` holds `config.json` and the pairing data, keep it across image updates. The container runs as the `node` user (uid 1000), so the data directory must be writable by it.
 
 On Proxmox, either run this in a Docker LXC or VM, or, on Proxmox VE 9.1 and later, push the image to a registry and create an LXC container from it, with a mount point for `/data` and a network device on the same LAN as your Home hubs and Doorbird.

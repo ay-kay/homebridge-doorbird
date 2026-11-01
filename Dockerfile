@@ -20,6 +20,7 @@ COPY --from=build /src/homebridge-doorbird-*.tgz /tmp/
 RUN npm install --omit=dev --no-fund --no-audit homebridge@^2 /tmp/homebridge-doorbird-*.tgz && \
     rm /tmp/homebridge-doorbird-*.tgz && npm cache clean --force && \
     mkdir /data && chown node:node /data
+COPY docker/doorbird-check.js ./
 
 # config.json, pairing data (persist/) and cached accessories live here.
 VOLUME /data
