@@ -16,9 +16,9 @@
 It provides the HomeKit video doorbell service which includes a camera, lock, motion sensor, and infrared light service, using the excellent [homebridge-camera-ffmpeg](https://github/KhaosT/homebridge-camera-ffmpeg) as a foundation.
 
 ## Requirements and Limitations
-* Audio requires a version of [FFmpeg](https://ffmpeg.org) that is compiled with `fdk-aac` support. This plugin uses [ffmpeg-for-homebridge](https://github.com/homebridge/ffmpeg-for-homebridge) to streamline this for some of the more common operating systems. Check the [ffmpeg-for-homebridge](https://github.com/homebridge/ffmpeg-for-homebridge) page for details on supported operating systems. If your operating system isn't supported, you'll need to compile your own. Instructions are beyond the scope of this plugin.
+* Audio requires a version of [FFmpeg](https://ffmpeg.org) that is compiled with `libopus` support (`fdk-aac` is no longer needed). This plugin uses [ffmpeg-for-homebridge](https://github.com/homebridge/ffmpeg-for-homebridge), which includes `libopus`, to streamline this for some of the more common operating systems. Check the [ffmpeg-for-homebridge](https://github.com/homebridge/ffmpeg-for-homebridge) page for details on supported operating systems. If your operating system isn't supported, most FFmpeg packages (e.g. Debian's and Homebrew's) come with `libopus` too. See [audio](#audio).
 
-* Two-way audio is not currently supported. Currently, you can hear audio but the microphone capability is yet to be implemented.
+* Two-way audio (the Talk button in the Home app) also requires `libopus` support in FFmpeg. See [two-way audio](#two-way-audio).
 
 ## Installation
 
@@ -61,6 +61,25 @@ Feature options allow you to enable or disable certain features in this plugin. 
 The feature options for individual Doorbird devices can be customized using the `options` setting inside the `doorbirds` section. Available options:
 
 * <CODE>Relay.Hide.<I>relay</I></CODE> - hide the relay named *relay* from being shown in HomeKit.
+* <CODE>Audio.TwoWay.Disable</CODE> - disable two-way audio (the Talk button in the Home app) for this Doorbird.
+
+### <A NAME="audio"></A>Audio
+The plugin streams the Doorbird's microphone to HomeKit as [Opus](https://opus-codec.org), at the sample rate the Home app asks for (24 or 16 kHz), the same way Home Assistant's HomeKit Bridge does. Earlier versions used AAC-ELD, which iOS played back distorted and with lagging video.
+
+How it works: FFmpeg encodes the audio with `libopus` and sends it to the plugin, which encrypts it for HomeKit (SRTP). The plugin does the encryption itself because FFmpeg stamps Opus with a 48 kHz clock, while HomeKit expects the clock of the negotiated sample rate. The audio is available whenever FFmpeg has `libopus`; there's nothing to configure.
+
+### <A NAME="two-way-audio"></A>Two-way audio
+Pressing the Talk button in the live view of the Home app plays your voice on the Doorbird's speaker. Two-way audio is enabled by default whenever FFmpeg supports audio, and can be disabled per Doorbird with the `Audio.TwoWay.Disable` feature option. Enabling or disabling it adds or removes the speaker in HomeKit after a restart of Homebridge.
+
+How it works: HomeKit sends your voice to Homebridge as encrypted Opus audio, and only while the Talk button is pressed. The plugin decrypts it, then starts an FFmpeg process that decodes the audio and streams it to the Doorbird's `audio-transmit.cgi` API as G.711 mu-law. A couple of seconds after you release the Talk button (`talkbackIdleSeconds`, default: 3), the plugin stops FFmpeg and closes the connection to the Doorbird again.
+
+Requirements and caveats:
+
+* FFmpeg must be compiled with `libopus` (the bundled [ffmpeg-for-homebridge](https://github.com/homebridge/ffmpeg-for-homebridge) is). The log tells you at startup whether two-way audio is enabled.
+* The Doorbird user configured for this plugin must be allowed to talk through the Doorbird. If the Doorbird rejects the audio, the plugin logs a "Two-way audio error" with the HTTP status.
+* The Doorbird has a single speech channel. While someone is talking through HomeKit, nobody can talk through the Doorbird app (and vice versa). The channel is released `talkbackIdleSeconds` after you release the Talk button, and when you close the live view.
+* There is no echo cancellation. If the Home app plays the Doorbird's audio while you talk, you may hear yourself with a delay. Muting the live view audio or using headphones helps.
+* Audio from the Home app reaches the Doorbird with a small delay (FFmpeg startup and buffering), and the first fraction of a second of each talk burst may be lost.
 
 ### Night vision
 Depending on your situation, you might benefit from having Doorbird's infrared light (aka night vision) turn on automatically for you.
@@ -135,6 +154,7 @@ This step is not required. For those that prefer to tailor the defaults to their
         "primaryRelay": "1",
         "cmdDoorbell": "/some/doorbell/script",
         "cmdMotion": "/some/motion/script",
+        "talkbackIdleSeconds": 3,
         "options": [ "Relay.Hide.2" ]
       }
     ]
@@ -170,6 +190,7 @@ Platform-level configuration parameters:
 | relayNames             | Map of relay to the name to show in HomeKit, e.g. `{ "gggggg@1": "Front Door" }`. See [relay names](#relay-names). |                    | No       |
 | cmdDoorbell            | Command line to execute when a doorbell event is triggered. |                                                                                   | No       |
 | cmdMotion              | Command line to execute when a motion event is triggered. |                                                                                     | No       |
+| talkbackIdleSeconds    | Seconds without audio from the Talk button after which the Doorbird speaker is released (at most 10). See [two-way audio](#two-way-audio). | 3 | No       |
 | options                | Configure [feature options](#feature-options) for this Doorbird. |                                                                              | No       |
 
 ## Credits

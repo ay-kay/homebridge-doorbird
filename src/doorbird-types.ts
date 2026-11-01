@@ -44,6 +44,7 @@ export interface DoorbirdStationConfigInterface {
   primaryRelay: string,
   relayNames?: { [relay: string]: string },
   snapshotUrl: string,
+  talkbackIdleSeconds?: number,
   username: string,
   password: string
 }

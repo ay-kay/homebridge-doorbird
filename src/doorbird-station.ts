@@ -4,6 +4,7 @@
  */
 import { exec } from "child_process";
 import { DoorbirdApi } from "./doorbird-api";
+import { FfmpegProcess } from "./doorbird-ffmpeg";
 import { DoorbirdPlatform } from "./doorbird-platform";
 import { DoorbirdStreamingDelegate } from "./doorbird-stream";
 import { DoorbirdStationConfig } from "./doorbird-types";
@@ -436,9 +437,34 @@ export class DoorbirdStation {
     this.snapshotUrl = this.config.snapshotUrl ? this.config.snapshotUrl : this.dbApi.snapshotUrl();
 
     // Configure the video stream and inform HomeKit about it.
-    this.streamingDelegate = new DoorbirdStreamingDelegate(this);
+    this.streamingDelegate = new DoorbirdStreamingDelegate(this, await this.twoWayAudioEnabled());
     this.accessory.configureController(this.streamingDelegate.controller);
 
+    return true;
+  }
+
+  // Determine whether we offer two-way audio (the Talk button in the Home app). It's on by default, but requires an FFmpeg with libopus.
+  private async twoWayAudioEnabled(): Promise<boolean> {
+
+    if(this.options.indexOf("AUDIO.TWOWAY.DISABLE") !== -1) {
+      this.log("%s: Two-way audio disabled.", this.name);
+      return false;
+    }
+
+    let audioSupport = false;
+
+    try {
+      audioSupport = await FfmpegProcess.codecEnabled(DoorbirdStreamingDelegate.videoProcessor(this.platform), "libopus");
+    } catch(error) {
+      this.debug("%s: Unable to query FFmpeg for its codecs: %s", this.name, error instanceof Error ? error.message : error);
+    }
+
+    if(!audioSupport) {
+      this.log("%s: Two-way audio disabled. A version of FFmpeg that is compiled with libopus support is required to support audio.", this.name);
+      return false;
+    }
+
+    this.log("%s: Two-way audio enabled.", this.name);
     return true;
   }
 

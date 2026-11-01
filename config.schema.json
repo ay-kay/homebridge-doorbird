@@ -3,7 +3,7 @@
   "pluginType": "platform",
   "singular": true,
   "headerDisplay": "homebridge-doorbird: Nearly complete HomeKit support for Doorbird. See the [Github project page](https://github.com/brownad/homebridge-doorbird) for more documentation.",
-  "footerDisplay": "The **ffmpeg** binary must be installed on your system for this plugin to work. For audio support, make sure your version of ffmpeg is compiled with support for **fdk-aac**.",
+  "footerDisplay": "The **ffmpeg** binary must be installed on your system for this plugin to work. For audio support, make sure your version of ffmpeg is compiled with support for **libopus** (the bundled ffmpeg-for-homebridge is).",
 
   "schema": {
     "type": "object",
@@ -106,6 +106,15 @@
               "type": "string"
             },
 
+            "talkbackIdleSeconds": {
+              "title": "Two-way Audio Idle Timeout",
+              "description": "Release the Doorbird speaker after this many seconds without audio from the Home app's Talk button. While HomeKit holds the speaker, the Doorbird app can't talk. Default: 3",
+              "type": "number",
+              "minimum": 1,
+              "maximum": 10,
+              "placeholder": 3
+            },
+
             "options": {
               "type": "array",
               "title": "Doorbird Feature Options",
@@ -115,7 +124,7 @@
                 "title": "Feature Option",
                 "required": false,
                 "description": "Enter only one option per entry. See project page for the complete list of available options.",
-                "placeholder": "e.g. Relay.Hide.2"
+                "placeholder": "e.g. Relay.Hide.2 or Audio.TwoWay.Disable"
               }
             }
           }
@@ -221,7 +230,8 @@
                   "description": "These settings provide additional customization options for this plugin.",
                   "items": [
                     "doorbirds[].primaryRelay",
-                    "doorbirds[].snapshotUrl"
+                    "doorbirds[].snapshotUrl",
+                    "doorbirds[].talkbackIdleSeconds"
                   ]
                 }
               ]

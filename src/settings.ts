@@ -26,5 +26,9 @@ export const DOORBIRD_NIGHTVISION_DURATION = 180;
 // Doorbird takes about 2 minutes to reboot.
 export const DOORBIRD_REBOOT_DURATION = 120;
 
+// Two-way audio: stop talking to the Doorbird after this many seconds without audio from HomeKit. HomeKit only sends audio while the Talk button is pressed,
+// and the Doorbird has a single speech channel that we must release as soon as possible.
+export const DOORBIRD_TALKBACK_IDLE_TIMEOUT = 3;
+
 // Doorbird unlock relay duration, in seconds. This can be configured within the Doorbird app, but rarely customized by users.
 export const DOORBIRD_UNLOCK_DURATION = 5;

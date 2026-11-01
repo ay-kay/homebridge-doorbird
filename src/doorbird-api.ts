@@ -282,6 +282,26 @@ export class DoorbirdApi {
     return this.authUrl() + "/bha-api/audio-transmit.cgi";
   }
 
+  // Open a streaming HTTP request to the Doorbird audio transmit API. The body is a raw G.711 mu-law, 8 kHz, mono stream. The Doorbird plays audio for
+  // as long as the request remains open, so we announce a (fake) large content length and close the connection ourselves once we're done talking.
+  // We authenticate with an Authorization header rather than putting the credentials in the URL.
+  public audioTransmitRequest(): http.ClientRequest {
+    const url = new URL("http://" + this.doorbirdAddress);
+
+    return http.request({
+      agent: false,
+      headers: {
+        "Authorization": "Basic " + Buffer.from(this.username + ":" + this.password).toString("base64"),
+        "Content-Length": "9999999",
+        "Content-Type": "audio/basic"
+      },
+      hostname: url.hostname,
+      method: "POST",
+      path: "/bha-api/audio-transmit.cgi",
+      port: url.port || 80
+    });
+  }
+
   // Return the URL for the Doorbird MJPEG video stream.
   public videoUrl(): string {
 

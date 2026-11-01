@@ -5,9 +5,13 @@
  * This module is heavily inspired by the homebridge and homebridge-camera-ffmpeg source code and
  * borrows heavily from both. Thank you for your contributions to the HomeKit world.
  */
+import { DoorbirdAudioProxy, opusFfmpegOutput } from "./doorbird-audio-proxy";
 import { FfmpegProcess } from "./doorbird-ffmpeg";
 import { DoorbirdPlatform } from "./doorbird-platform";
+import { ClientRequest } from "http";
 import { DoorbirdStation } from "./doorbird-station";
+import { DoorbirdTalkback } from "./doorbird-talkback";
+import { DOORBIRD_TALKBACK_IDLE_TIMEOUT } from "./settings";
 import getPort from "get-port";
 import {
   API,
@@ -60,6 +64,7 @@ export class DoorbirdStreamingDelegate implements CameraStreamingDelegate {
   readonly name: string;
   needNightVision: boolean;
   readonly platform: DoorbirdPlatform;
+  readonly twoWayAudio: boolean;
   readonly videoProcessor: string;
   private readonly interfaceName = "public";
   controller: CameraController;
@@ -67,8 +72,9 @@ export class DoorbirdStreamingDelegate implements CameraStreamingDelegate {
   // Keep track of streaming sessions.
   pendingSessions: Record<string, SessionInfo> = {};
   ongoingSessions: Record<string, FfmpegProcess> = {};
+  audioSessions: Record<string, DoorbirdAudioProxy> = {};
 
-  constructor(doorbird: DoorbirdStation) {
+  constructor(doorbird: DoorbirdStation, twoWayAudio = false) {
     this.api = doorbird.api;
     this.doorbird = doorbird;
     this.debug = doorbird.debug.bind(doorbird.platform);
@@ -77,10 +83,11 @@ export class DoorbirdStreamingDelegate implements CameraStreamingDelegate {
     this.name = doorbird.name;
     this.needNightVision = false;
     this.platform = doorbird.platform;
-    this.videoProcessor = doorbird.platform.config.videoProcessor || pathToFfmpeg || "ffmpeg";
+    this.twoWayAudio = twoWayAudio;
+    this.videoProcessor = DoorbirdStreamingDelegate.videoProcessor(doorbird.platform);
 
     this.api.on(APIEvent.SHUTDOWN, () => {
-      for(const session in this.ongoingSessions) {
+      for(const session of new Set([ ...Object.keys(this.ongoingSessions), ...Object.keys(this.audioSessions) ])) {
         this.stopStream(session);
       }
     });
@@ -112,16 +119,28 @@ export class DoorbirdStreamingDelegate implements CameraStreamingDelegate {
           }
         },
         audio: {
+          // Opus, like Home Assistant's HomeKit Bridge. With AAC-ELD, iOS played the audio distorted and the video lagged.
           codecs: [
             {
-              type: AudioStreamingCodecType.AAC_ELD,
+              type: AudioStreamingCodecType.OPUS,
+              samplerate: AudioStreamingSamplerate.KHZ_24
+            },
+            {
+              type: AudioStreamingCodecType.OPUS,
               samplerate: AudioStreamingSamplerate.KHZ_16
             }
-          ]
+          ],
+          // Two-way audio adds the speaker service, which gives us the Talk button in the Home app.
+          twoWayAudio: twoWayAudio
         }
       }
     };
     this.controller = new this.hap.CameraController(options);
+  }
+
+  // The FFmpeg binary we use: the user's choice, our bundled version from ffmpeg-for-homebridge, or whatever is in the path.
+  static videoProcessor(platform: DoorbirdPlatform): string {
+    return platform.config.videoProcessor || (pathToFfmpeg as string | undefined) || "ffmpeg";
   }
 
   // HomeKit image snapshot request handler.
@@ -211,19 +230,32 @@ export class DoorbirdStreamingDelegate implements CameraStreamingDelegate {
     // We do this primarily for speed and interactivity at the expense of some minor additional overhead. In
     // testing, this produces the best combination of instantaneous response with the right level of quality.
     const videomtu = 188 * 5;
-    const audiomtu = 188 * 1;
 
-    // Validate that we have a version of FFmpeg that supports libfdk_aac for audio support. We save what
-    // we discovered so we don't unencessarily repeat this check multiple times for one streaming session.
-    let audioSupport = 0;
-    if(await FfmpegProcess.codecEnabled(this.videoProcessor, "libfdk_aac")) {
-      audioSupport = 1;
+    // Validate that we have a version of FFmpeg that supports libopus for audio support.
+    let audioProxy: DoorbirdAudioProxy | null = null;
+
+    if((request.audio.codec === AudioStreamingCodecType.OPUS) && await FfmpegProcess.codecEnabled(this.videoProcessor, "libopus")) {
+
+      // FFmpeg sends the audio to our proxy, so the proxy has to be up and running before we can assemble the command line.
+      audioProxy = await this.startAudioProxy(request, sessionInfo);
+    }
+
+    // The stream was stopped while we were getting ready.
+    if(this.pendingSessions[request.sessionID] !== sessionInfo) {
+      audioProxy?.close();
+      callback(new Error(this.name + ": The stream was stopped before it started."));
+      return;
+    }
+
+    // The proxy lives as long as the stream, stopStream tears it down.
+    if(audioProxy) {
+      this.audioSessions[request.sessionID] = audioProxy;
     }
 
     let fcmd = "-rtsp_transport tcp -i " + this.doorbird.cameraUrl;
 
     // Grab the audio URL and add it to the input pipeline.
-    if(audioSupport) {
+    if(audioProxy) {
       fcmd += " -f mulaw -ar 8000 -ac 1 -i " + this.doorbird.audioUrl;
     }
 
@@ -251,36 +283,17 @@ export class DoorbirdStreamingDelegate implements CameraStreamingDelegate {
     fcmd += ffmpegVideoArgs;
     fcmd += ffmpegVideoStream;
 
-    // Configure the audio portion of the command line, but only if our version of FFmpeg supports libfdk_aac.
-    if(audioSupport) {
-      // Configure our video parameters.
-      const ffmpegAudioArgs =
-        " -map 1:0" +
-        " -acodec libfdk_aac" +
-        " -profile:a aac_eld" +
-        " -flags +global_header" +
-        " -f null" +
-        " -ar " + request.audio.sample_rate + "k" +
-        // Keep the controller's bitrate: higher AAC-ELD bitrates produce frames larger than one RTP packet and iOS drops fragmented frames.
-        " -b:a " + request.audio.max_bit_rate + "k -afterburner 1" +
-        " -bufsize " + (2 * request.audio.max_bit_rate) + "k" +
-        " -ac 1" +
-        " -payload_type " + request.audio.pt +
-        // Video and audio come from two independent DoorBird sources without a common clock, so the RTCP sender reports ffmpeg
-        // would emit per stream describe an A/V offset that does not exist. iOS tries to lip-sync against them and the audio stutters.
-        " -rtpflags skip_rtcp";
-
-      // Add the required RTP settings and encryption for the stream.
-      const ffmpegAudioStream =
-        " -ssrc " + sessionInfo.audioSSRC +
-        " -f rtp" +
-        " -srtp_out_suite AES_CM_128_HMAC_SHA1_80" +
-        " -srtp_out_params " + sessionInfo.audioSRTP.toString("base64") +
-        " srtp://" + sessionInfo.address + ":" + sessionInfo.audioPort +
-        "?rtcpport=" + sessionInfo.audioPort + "&localrtcpport=" + sessionInfo.audioPort + "&pkt_size=" + audiomtu;
-
-      fcmd += ffmpegAudioArgs;
-      fcmd += ffmpegAudioStream;
+    // Configure the audio portion of the command line, but only if our version of FFmpeg supports libopus. FFmpeg encodes Opus and sends it as plain
+    // RTP to our audio proxy, which rewrites the timestamps to the negotiated clock and encrypts the stream for HomeKit.
+    if(audioProxy) {
+      fcmd += " -map 1:0 " + opusFfmpegOutput({
+        bitrate: request.audio.max_bit_rate,
+        packetTime: request.audio.packet_time,
+        payloadType: request.audio.pt,
+        port: audioProxy.ffmpegPort,
+        sampleRate: request.audio.sample_rate,
+        ssrc: sessionInfo.audioSSRC
+      });
     }
 
     // Additional logging, but only if we're debugging.
@@ -294,6 +307,46 @@ export class DoorbirdStreamingDelegate implements CameraStreamingDelegate {
     // Some housekeeping for our FFmpeg sessions.
     this.ongoingSessions[request.sessionID] = ffmpeg;
     delete this.pendingSessions[request.sessionID];
+  }
+
+  // Start the audio proxy for a streaming session: it encrypts our audio for HomeKit, and relays the return audio to the Doorbird if two-way audio is
+  // enabled. Without the proxy, we stream video only.
+  private async startAudioProxy(request: StartStreamRequest, sessionInfo: SessionInfo): Promise<DoorbirdAudioProxy | null> {
+    let talkback: DoorbirdTalkback | null = null;
+
+    if(this.twoWayAudio) {
+      const idleSeconds = Number(this.doorbird.config.talkbackIdleSeconds);
+
+      talkback = new DoorbirdTalkback({
+        debug: this.debug,
+        // FFmpeg gives up on an RTP input after 10 seconds without packets, so we stay below that.
+        idleSeconds: (Number.isFinite(idleSeconds) && (idleSeconds > 0)) ? Math.min(idleSeconds, 10) : DOORBIRD_TALKBACK_IDLE_TIMEOUT,
+        log: this.log,
+        name: this.name,
+        openTransmit: (): ClientRequest => this.doorbird.dbApi.audioTransmitRequest(),
+        payloadType: request.audio.pt,
+        videoProcessor: this.videoProcessor
+      });
+    }
+
+    try {
+      return await DoorbirdAudioProxy.open({
+        address: sessionInfo.address,
+        audioPort: sessionInfo.audioPort,
+        debug: this.debug,
+        log: this.log,
+        name: this.name,
+        payloadType: request.audio.pt,
+        returnPort: sessionInfo.audioReturnPort,
+        sampleRate: request.audio.sample_rate * 1000,
+        srtp: sessionInfo.audioSRTP,
+        talkback: talkback
+      });
+    } catch(error) {
+      talkback?.close();
+      this.log.error("%s: Audio is unavailable for this session: %s", this.name, error instanceof Error ? error.message : error);
+      return null;
+    }
   }
 
   // Process incoming stream requests.
@@ -326,6 +379,13 @@ export class DoorbirdStreamingDelegate implements CameraStreamingDelegate {
   // Close a video stream.
   public stopStream(sessionId: string): void {
     try {
+      delete this.pendingSessions[sessionId];
+
+      if(this.audioSessions[sessionId]) {
+        this.audioSessions[sessionId].close();
+        delete this.audioSessions[sessionId];
+      }
+
       if (this.ongoingSessions[sessionId]) {
         const ffmpegProcess = this.ongoingSessions[sessionId];
         if(ffmpegProcess) {
