@@ -30,7 +30,6 @@ import {
   StreamRequestCallback,
   StreamRequestTypes
 } from "homebridge";
-import ip from "ip";
 
 // Bring in a precompiled ffmpeg binary that meets our requirements, if available.
 const pathToFfmpeg = require("ffmpeg-for-homebridge"); // eslint-disable-line @typescript-eslint/no-var-requires
@@ -147,7 +146,7 @@ export class DoorbirdStreamingDelegate implements CameraStreamingDelegate {
       callback(undefined, buffer);
     } catch(error) {
       this.log.error("%s: An error occurred while making a snapshot request: %s.", this.name, error);
-      callback(error);
+      callback(error instanceof Error ? error : new Error(String(error)));
     }
   }
 
@@ -174,11 +173,7 @@ export class DoorbirdStreamingDelegate implements CameraStreamingDelegate {
       audioSSRC: audioSSRC
     };
 
-    const currentAddress = ip.address("public", request.addressVersion);
-
     const response: PrepareStreamResponse = {
-      address: currentAddress,
-
       video: {
         port: videoReturnPort,
         ssrc: videoSSRC,
@@ -225,11 +220,11 @@ export class DoorbirdStreamingDelegate implements CameraStreamingDelegate {
       audioSupport = 1;
     }
 
-    let fcmd = "-re -i " + this.doorbird.cameraUrl;
+    let fcmd = "-rtsp_transport tcp -i " + this.doorbird.cameraUrl;
 
     // Grab the audio URL and add it to the input pipeline.
     if(audioSupport) {
-      fcmd += " -f mulaw -ar 8000 -i " + this.doorbird.audioUrl;
+      fcmd += " -f mulaw -ar 8000 -ac 1 -i " + this.doorbird.audioUrl;
     }
 
     this.log("%s: HomeKit video stream requested: %sx%s, %s fps, %s kbps.",
@@ -238,17 +233,9 @@ export class DoorbirdStreamingDelegate implements CameraStreamingDelegate {
     // Configure our video parameters.
     const ffmpegVideoArgs =
       " -map 0:0" +
-      " -vcodec libx264" +
-      " -pix_fmt yuvj420p" +
-      " -r " + request.video.fps +
-      " -f rawvideo" +
-      " " + this.platform.config.ffmpegOptions +
-      " -probesize 32 -analyzeduration 0 -fflags nobuffer" +
-      " -preset veryfast" +
-      " -refs 1 -x264-params intra-refresh=1:bframes=0" +
-      " -b:v " + request.video.max_bit_rate + "k" +
-      " -bufsize " + (2 * request.video.max_bit_rate) + "k" +
-      " -maxrate " + request.video.max_bit_rate + "k" +
+      // The DoorBird already delivers H.264 that HomeKit plays back directly. Re-encoding added 1-2 s of latency and, because the DoorBird
+      // delivers ~20 fps while announcing 30, two thirds of the frames were duplicates. Passing the stream through is what Home Assistant does.
+      " -vcodec copy" +
       " -payload_type " + request.video.pt;
 
     // Add the required RTP settings and encryption for the stream.
@@ -274,10 +261,14 @@ export class DoorbirdStreamingDelegate implements CameraStreamingDelegate {
         " -flags +global_header" +
         " -f null" +
         " -ar " + request.audio.sample_rate + "k" +
-        " -b:a " + request.audio.max_bit_rate + "k" +
+        // Keep the controller's bitrate: higher AAC-ELD bitrates produce frames larger than one RTP packet and iOS drops fragmented frames.
+        " -b:a " + request.audio.max_bit_rate + "k -afterburner 1" +
         " -bufsize " + (2 * request.audio.max_bit_rate) + "k" +
         " -ac 1" +
-        " -payload_type " + request.audio.pt;
+        " -payload_type " + request.audio.pt +
+        // Video and audio come from two independent DoorBird sources without a common clock, so the RTCP sender reports ffmpeg
+        // would emit per stream describe an A/V offset that does not exist. iOS tries to lip-sync against them and the audio stutters.
+        " -rtpflags skip_rtcp";
 
       // Add the required RTP settings and encryption for the stream.
       const ffmpegAudioStream =
@@ -310,7 +301,11 @@ export class DoorbirdStreamingDelegate implements CameraStreamingDelegate {
 
     switch(request.type) {
       case StreamRequestTypes.START:
-        this.startStream(request, callback);
+        // Node 22 terminates the process on unhandled promise rejections, so make sure a failure here (e.g. FFmpeg not found) is handled.
+        this.startStream(request, callback).catch((error: unknown) => {
+          this.log.error("%s: Unable to start the video stream: %s", this.name, error instanceof Error ? error.message : error);
+          callback(error instanceof Error ? error : new Error(String(error)));
+        });
         break;
 
       case StreamRequestTypes.RECONFIGURE:

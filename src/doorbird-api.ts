@@ -5,7 +5,6 @@
 import { DOORBIRD_API_RESPONSE_TIME, DOORBIRD_HEARTBEAT_INTERVAL, DOORBIRD_REBOOT_DURATION } from "./settings";
 import { DoorbirdDeviceDetail, DoorbirdDeviceInformation } from "./doorbird-types";
 import fetch, { FetchError, RequestInfo, RequestInit, Response } from "node-fetch";
-import { AbortController } from "abort-controller";
 import { DoorbirdPlatform } from "./doorbird-platform";
 import { Logging } from "homebridge";
 import http from "http";

@@ -100,6 +100,15 @@ Another example configuration using a relay on a peripheral device:
 The name of the controller or station can be found in the App:
 Administration > Peripherals > Device (6-letter word)
 
+#### Relay names
+By default, each relay appears in HomeKit as `<Doorbird name> Relay <relay>`. HomeKit only accepts names made of letters, numbers, spaces and apostrophes that start and end with a letter or number, so any other characters are replaced with a space (e.g. relay `gggggg@1` becomes `Front Door Relay gggggg 1`).
+
+You can give individual relays their own name using the optional `relayNames` setting, which maps a relay (as shown in the `detected relay: xxxx` log entries) to a name:
+```js
+"relayNames": { "1": "Gate", "gggggg@1": "Front Door" }
+```
+Configured names are sanitized in the same way. Renaming a relay does not change its identity in HomeKit, so existing automations keep working.
+
 ### <A NAME="advanced-config"></A>Advanced configuration (optional)
 This step is not required. For those that prefer to tailor the defaults to their liking, here are the supported parameters.
 
@@ -158,6 +167,7 @@ Platform-level configuration parameters:
 | nightVisionSnapshotNight | Activate night vision when taking snapshots at night. | false                                                                                 | No       |
 | nightVisionVideoNight    | Activate night vision when streaming video at night.  | false                                                                                 | No       |
 | primaryRelay           | Default relay to use for doorbell lock events.          | "1"                                                                                   | No       |
+| relayNames             | Map of relay to the name to show in HomeKit, e.g. `{ "gggggg@1": "Front Door" }`. See [relay names](#relay-names). |                    | No       |
 | cmdDoorbell            | Command line to execute when a doorbell event is triggered. |                                                                                   | No       |
 | cmdMotion              | Command line to execute when a motion event is triggered. |                                                                                     | No       |
 | options                | Configure [feature options](#feature-options) for this Doorbird. |                                                                              | No       |

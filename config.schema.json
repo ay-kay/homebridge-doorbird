@@ -55,6 +55,15 @@
               "type": "string"
             },
 
+            "relayNames": {
+              "title": "Relay Names",
+              "description": "Optional map of relay to the name shown in HomeKit, e.g. { \"gggggg@1\": \"Front Door\" }. Default: <Doorbird name> Relay <relay>.",
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              }
+            },
+
             "nightVisionSnapshot": {
               "title": "Use Night Vision for Snapshots (Always)",
               "description": "Always enable night vision for snapshots.",

@@ -81,7 +81,9 @@ export class DoorbirdStation {
 
     // Initialize our connection to the Doorbird API and instantiate our accessory.
     this.dbApi = new DoorbirdApi(platform, this.name, doorbirdConfig.ip, doorbirdConfig.username, doorbirdConfig.password);
-    this.configureDoorbird();
+    this.configureDoorbird().catch((error: unknown) => {
+      this.log.error("%s: Error configuring the Doorbird: %s", this.name, error instanceof Error ? error.message : error);
+    });
   }
 
   // Configure the Doorbird for HomeKit.
@@ -120,6 +122,13 @@ export class DoorbirdStation {
 
     // Let the API know what our name is for logging purposes.
     this.dbApi.name = this.name;
+
+    // Keep the accessory named after the configured name, so a rename in config.json carries through to the services
+    // we (re)create below. The HomeKit identity is tied to the UUID, not the name, so this is safe for existing pairings.
+    if(this.accessory.displayName !== this.name) {
+      this.log("%s: Renaming accessory from \"%s\".", this.name, this.accessory.displayName);
+      this.accessory.displayName = this.name;
+    }
 
     // Set device information.
     if(!(await this.configureInfo())) {
@@ -204,7 +213,9 @@ export class DoorbirdStation {
     // Update the firmware revision for this Doorbird.
     accessory
       .getService(hap.Service.AccessoryInformation)!
-      .getCharacteristic(hap.Characteristic.FirmwareRevision).updateValue("0." + parseInt(this.dbApi.firmware));
+      .getCharacteristic(hap.Characteristic.FirmwareRevision).updateValue("0." + parseInt(this.dbApi.firmware ?? "0"));
+
+    this.accessory.getService(hap.Service.AccessoryInformation)!.updateCharacteristic(hap.Characteristic.Name, this.name);
 
     return true;
   }
@@ -244,7 +255,7 @@ export class DoorbirdStation {
     }
 
     // Activate or deactivate night vision.
-    this.accessory.addService(lightService, "Night Vision")
+    this.accessory.addService(lightService)
       .getCharacteristic(this.hap.Characteristic.On)!
       .on(CharacteristicEventTypes.GET, (callback: CharacteristicGetCallback) => {
         callback(null, this.nightVision);
@@ -304,8 +315,13 @@ export class DoorbirdStation {
       this.relayCurrentState[relay] = this.hap.Characteristic.LockCurrentState.SECURED;
       this.relayTargetState[relay] = this.hap.Characteristic.LockTargetState.SECURED;
 
-      // Make the relay available to HomeKit.
-      const relayService = new this.hap.Service.LockMechanism(this.accessory.displayName + " Relay " + relay, relay);
+      // Make the relay available to HomeKit. Relay ids can contain characters HomeKit rejects in names (e.g. "ghkgqg@1"), so we sanitize
+      // the display name. The service subtype stays the raw relay id so existing HomeKit identities are preserved.
+      const relayName = this.relayName(relay);
+
+      this.debug("%s: Using name \"%s\" for relay %s.", this.name, relayName, relay);
+
+      const relayService = new this.hap.Service.LockMechanism(relayName, relay);
       this.accessory
         .addService(relayService)
         .setCharacteristic(this.hap.Characteristic.LockCurrentState, this.relayCurrentState[relay])
@@ -372,6 +388,23 @@ export class DoorbirdStation {
     }
 
     return true;
+  }
+
+  // Determine the HomeKit name for a relay: a user-configured name from relayNames, or "<Doorbird name> Relay <relay id>" by default.
+  private relayName(relay: string): string {
+    const configuredName = this.config.relayNames?.[relay];
+    const name = DoorbirdStation.sanitizeName((typeof configuredName === "string") ? configuredName : "");
+
+    return name || DoorbirdStation.sanitizeName(this.accessory.displayName + " Relay " + relay) || "Relay";
+  }
+
+  // HomeKit only accepts names that start and end with a letter or number. We restrict names to letters, numbers, spaces and
+  // apostrophes, replacing anything else with a space (e.g. "ghkgqg@1" becomes "ghkgqg 1").
+  static sanitizeName(name: string): string {
+    return name
+      .replace(/[^\p{L}\p{N}' ]/gu, " ")
+      .replace(/ {2,}/g, " ")
+      .replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, "");
   }
 
   // Configure a camera accessory for HomeKit.

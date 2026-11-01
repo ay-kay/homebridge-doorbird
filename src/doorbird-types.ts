@@ -3,14 +3,22 @@
  * doorbird-types.ts: Type definitions for Doorbird.
  */
 
-// An complete description of the Doorbird device information JSON.
-export interface DoorbirdDeviceInfoInterface {
+// An complete description of the Doorbird device information JSON (the contents of BHA.VERSION[0] returned by info.cgi).
+export interface DoorbirdDeviceDetailInterface {
   BUILD_NUMBER: string,
   "DEVICE-TYPE": string,
   FIRMWARE: string,
   PRIMARY_MAC_ADDR: string,
   RELAYS: string[],
   WIFI_MAC_ADDR: string
+}
+
+// The full JSON response returned by the Doorbird info.cgi API call.
+export interface DoorbirdDeviceInformationInterface {
+  BHA: {
+    RETURNCODE: string,
+    VERSION: DoorbirdDeviceDetail[]
+  }
 }
 
 // Plugin configuration options.
@@ -34,6 +42,7 @@ export interface DoorbirdStationConfigInterface {
   nightVisionVideoNight: boolean,
   options: string[],
   primaryRelay: string,
+  relayNames?: { [relay: string]: string },
   snapshotUrl: string,
   username: string,
   password: string
@@ -42,6 +51,7 @@ export interface DoorbirdStationConfigInterface {
 // We use types instead of interfaces here because we can more easily set the entire thing as readonly.
 // Unfortunately, interfaces can't be quickly set as readonly in Typescript without marking each and
 // every property as readonly along the way.
-export type DoorbirdDeviceInfo = Readonly<DoorbirdDeviceInfoInterface>;
+export type DoorbirdDeviceDetail = Readonly<DoorbirdDeviceDetailInterface>;
+export type DoorbirdDeviceInformation = Readonly<DoorbirdDeviceInformationInterface>;
 export type DoorbirdConfig = Readonly<DoorbirdConfigInterface>;
 export type DoorbirdStationConfig = DoorbirdStationConfigInterface;

@@ -20,7 +20,7 @@ export class FfmpegProcess {
   private delegate: DoorbirdStreamingDelegate;
 
   constructor(delegate: DoorbirdStreamingDelegate, sessionId: string, command: string, returnPort: number, callback: StreamRequestCallback) {
-    this.debug = delegate.platform.debug.bind(this);
+    this.debug = delegate.platform.debug.bind(delegate.platform);
     this.delegate = delegate;
     this.log = delegate.platform.log;
 
