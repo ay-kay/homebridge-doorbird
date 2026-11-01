@@ -1,0 +1,25 @@
+{
+  "bridge": {
+    "name": "Homebridge Doorbird",
+    "username": "0E:D0:0B:12:34:56",
+    "port": 51826,
+    "pin": "031-45-154",
+    "advertiser": "ciao"
+  },
+
+  "platforms": [
+    {
+      "platform": "Doorbird",
+
+      "doorbirds": [
+        {
+          "name": "Doorbird",
+          "ip": "192.168.1.50",
+          "username": "your-doorbird-api-user",
+          "password": "your-doorbird-password",
+          "options": [ "Audio.Enable" ]
+        }
+      ]
+    }
+  ]
+}
