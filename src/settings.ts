@@ -32,3 +32,10 @@ export const DOORBIRD_TALKBACK_IDLE_TIMEOUT = 3;
 
 // Doorbird unlock relay duration, in seconds. This can be configured within the Doorbird app, but rarely customized by users.
 export const DOORBIRD_UNLOCK_DURATION = 5;
+
+// How often and how quickly we retry a video stream that FFmpeg could not start, e.g. because the Doorbird was busy with a ring.
+export const STREAM_RETRIES = 2;
+export const STREAM_RETRY_DELAY = 1500;
+
+// Delay before we retry a failed snapshot request.
+export const SNAPSHOT_RETRY_DELAY = 600;

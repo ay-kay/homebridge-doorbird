@@ -11,7 +11,7 @@ import { DoorbirdPlatform } from "./doorbird-platform";
 import { ClientRequest } from "http";
 import { DoorbirdStation } from "./doorbird-station";
 import { DoorbirdTalkback } from "./doorbird-talkback";
-import { DOORBIRD_TALKBACK_IDLE_TIMEOUT } from "./settings";
+import { DOORBIRD_TALKBACK_IDLE_TIMEOUT, SNAPSHOT_RETRY_DELAY, STREAM_RETRIES, STREAM_RETRY_DELAY } from "./settings";
 import getPort from "get-port";
 import {
   API,
@@ -73,6 +73,7 @@ export class DoorbirdStreamingDelegate implements CameraStreamingDelegate {
   pendingSessions: Record<string, SessionInfo> = {};
   ongoingSessions: Record<string, FfmpegProcess> = {};
   audioSessions: Record<string, DoorbirdAudioProxy> = {};
+  private launches: Record<string, { attempts: number, command: string, videoReturnPort: number }> = {};
 
   constructor(doorbird: DoorbirdStation, twoWayAudio = false) {
     this.api = doorbird.api;
@@ -152,7 +153,13 @@ export class DoorbirdStreamingDelegate implements CameraStreamingDelegate {
       await this.doorbird.activateNightVision();
     }
 
-    const response = await this.doorbird.dbApi.fetch(this.doorbird.snapshotUrl);
+    let response = await this.doorbird.dbApi.fetch(this.doorbird.snapshotUrl);
+
+    // The Doorbird briefly refuses snapshots while it handles its own events (ring, motion). Try once more before giving up.
+    if(!response || !response.ok) {
+      await new Promise((resolve) => setTimeout(resolve, SNAPSHOT_RETRY_DELAY));
+      response = await this.doorbird.dbApi.fetch(this.doorbird.snapshotUrl);
+    }
 
     if(!response || !response.ok) {
       this.log("%s: Unable to retrieve snapshot.", this.name);
@@ -252,11 +259,15 @@ export class DoorbirdStreamingDelegate implements CameraStreamingDelegate {
       this.audioSessions[request.sessionID] = audioProxy;
     }
 
-    let fcmd = "-rtsp_transport tcp -i " + this.doorbird.cameraUrl;
+    // Low-latency input options: without them FFmpeg analyzes the inputs for several seconds, then flushes the backlog in a burst. The
+    // iPhone plays video sequentially from that burst and stays 2-3 s behind for the whole session (measured: first packet after 6.4 s
+    // and a 3 s backlog, versus 1.3 s and no backlog with these options).
+    const lowLatency = "-fflags nobuffer -flags low_delay -probesize 32 -analyzeduration 0";
+    let fcmd = lowLatency + " -rtsp_transport tcp -i " + this.doorbird.cameraUrl;
 
     // Grab the audio URL and add it to the input pipeline.
     if(audioProxy) {
-      fcmd += " -f mulaw -ar 8000 -ac 1 -i " + this.doorbird.audioUrl;
+      fcmd += " " + lowLatency + " -f mulaw -ar 8000 -ac 1 -i " + this.doorbird.audioUrl;
     }
 
     this.log("%s: HomeKit video stream requested: %sx%s, %s fps, %s kbps.",
@@ -300,6 +311,9 @@ export class DoorbirdStreamingDelegate implements CameraStreamingDelegate {
     if(this.platform.debugMode) {
       fcmd += " -loglevel debug"; // " -loglevel level+verbose";
     }
+
+    // Remember how we launched this session so we can retry if the Doorbird is busy.
+    this.launches[request.sessionID] = { attempts: 0, command: fcmd, videoReturnPort: sessionInfo.videoReturnPort };
 
     // Combine everything and start an instance of FFmpeg.
     const ffmpeg = new FfmpegProcess(this, request.sessionID, fcmd, sessionInfo.videoReturnPort, callback);
@@ -377,9 +391,35 @@ export class DoorbirdStreamingDelegate implements CameraStreamingDelegate {
   }
 
   // Close a video stream.
+  // Retry a stream whose FFmpeg exited before it produced anything. The Doorbird has few concurrent stream slots and refuses new
+  // streams while it handles a ring or motion event itself, which otherwise leaves HomeKit without video for 10-20 seconds.
+  public retryStream(sessionId: string, callback: StreamRequestCallback): boolean {
+    const launch = this.launches[sessionId];
+
+    if(!launch || !this.ongoingSessions[sessionId] || (launch.attempts >= STREAM_RETRIES)) {
+      return false;
+    }
+
+    launch.attempts++;
+    this.log.info("%s: Retrying the video stream in %s ms (attempt %s of %s).", this.name, STREAM_RETRY_DELAY, launch.attempts, STREAM_RETRIES);
+
+    setTimeout(() => {
+
+      // The session was stopped in the meantime.
+      if(!this.ongoingSessions[sessionId] || (this.launches[sessionId] !== launch)) {
+        return;
+      }
+
+      this.ongoingSessions[sessionId] = new FfmpegProcess(this, sessionId, launch.command, launch.videoReturnPort, callback);
+    }, STREAM_RETRY_DELAY);
+
+    return true;
+  }
+
   public stopStream(sessionId: string): void {
     try {
       delete this.pendingSessions[sessionId];
+      delete this.launches[sessionId];
 
       if(this.audioSessions[sessionId]) {
         this.audioSessions[sessionId].close();

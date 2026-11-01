@@ -6,7 +6,7 @@
  * borrows heavily from both. Thank you for your contributions to the HomeKit world.
  */
 import { ChildProcess, spawn } from "child_process";
-import { createSocket } from "dgram";
+import { Socket, createSocket } from "dgram";
 import execa from "execa";
 import { Logging, StreamRequestCallback } from "homebridge";
 import { DoorbirdStreamingDelegate } from "./doorbird-stream";
@@ -16,6 +16,8 @@ export class FfmpegProcess {
   private readonly log: Logging;
   private readonly process: ChildProcess;
   private killing = false;
+  private readonly socket: Socket;
+  private stderrTail: string[] = [];
   private timeout?: NodeJS.Timeout;
   private delegate: DoorbirdStreamingDelegate;
 
@@ -26,9 +28,12 @@ export class FfmpegProcess {
 
     let started = false;
 
-    this.debug("%s: ffmpeg command: %s %s", delegate.name, delegate.videoProcessor, command);
+    // Never log the Doorbird credentials embedded in the stream URLs.
+    this.debug("%s: ffmpeg command: %s %s", delegate.name, delegate.videoProcessor, command.replace(/(\w+:\/\/)[^@\s]+@/g, "$1<redacted>@"));
 
     const socket = createSocket("udp4");
+
+    this.socket = socket;
 
     // Handle network errors.
     socket.on("error", (error: Error) => {
@@ -74,12 +79,17 @@ export class FfmpegProcess {
           }
         }
 
-        // Debugging and additional logging, if requested.
-        if(delegate.platform.debugMode) {
-          data.toString().split(/\n/).forEach((line: string) => {
+        // Keep the last few lines so we can explain an unexpected exit even without debug logging.
+        data.toString().split(/\n/).forEach((line: string) => {
+          if(line.trim().length) {
+            this.stderrTail = this.stderrTail.concat(line.trim()).slice(-5);
+          }
+
+          // Debugging and additional logging, if requested.
+          if(delegate.platform.debugMode) {
             this.log(line);
-          });
-        }
+          }
+        });
       });
     }
 
@@ -104,6 +114,15 @@ export class FfmpegProcess {
         }
       } else {
         this.log.error(message + " (Error)", delegate.name);
+        this.stderrTail.forEach((line: string) => this.log.error("%s: ffmpeg: %s", delegate.name, line));
+
+        // Release the watchdog socket so a retry can bind the same return port.
+        this.closeSocket();
+
+        // The Doorbird refuses new streams while it is busy with its own events (ring, motion). Give it another chance before we fail.
+        if(!started && callback && delegate.retryStream(sessionId, callback)) {
+          return;
+        }
 
         delegate.stopStream(sessionId);
 
@@ -116,12 +135,22 @@ export class FfmpegProcess {
     });
   }
 
+  // Close the watchdog socket.
+  private closeSocket(): void {
+    try {
+      this.socket.close();
+    } catch {
+      // Already closed.
+    }
+  }
+
   // Cleanup.
   public stop(): void {
     this.killing = true;
     if(this.timeout) {
       clearTimeout(this.timeout);
     }
+    this.closeSocket();
     this.process.kill("SIGKILL");
   }
 
