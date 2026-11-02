@@ -1,10 +1,10 @@
 /* Unit tests for the talkback and audio proxy helpers. Run with: npm run build && node test/talkback-unit.test.js */
 "use strict";
 
-const assert = require("node:assert/strict");
-const { test } = require("node:test");
-const { TALKBACK_FFMPEG_COMMAND, buildTalkbackSdp, reserveRtpPortPair } = require("../dist/doorbird-talkback");
-const { opusFfmpegOutput } = require("../dist/doorbird-audio-proxy");
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { TALKBACK_FFMPEG_COMMAND, buildTalkbackSdp, reserveRtpPortPair } from "../dist/doorbird-talkback.js";
+import { opusFfmpegOutput } from "../dist/doorbird-audio-proxy.js";
 
 test("SDP for the talkback FFmpeg: plain Opus RTP on the 48 kHz clock", () => {
   assert.equal(buildTalkbackSdp({ payloadType: 110, port: 50000 }), [

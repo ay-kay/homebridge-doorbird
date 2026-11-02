@@ -2,10 +2,10 @@
  *
  * doorbird-api.ts: Our Doorbird API implementation.
  */
-import { DOORBIRD_API_RESPONSE_TIME, DOORBIRD_HEARTBEAT_INTERVAL, DOORBIRD_REBOOT_DURATION } from "./settings";
-import { DoorbirdDeviceDetail, DoorbirdDeviceInformation } from "./doorbird-types";
+import { DOORBIRD_API_RESPONSE_TIME, DOORBIRD_HEARTBEAT_INTERVAL, DOORBIRD_REBOOT_DURATION } from "./settings.js";
+import { DoorbirdDeviceDetail, DoorbirdDeviceInformation } from "./doorbird-types.js";
 import fetch, { FetchError, RequestInfo, RequestInit, Response } from "node-fetch";
-import { DoorbirdPlatform } from "./doorbird-platform";
+import { DoorbirdPlatform } from "./doorbird-platform.js";
 import { Logging } from "homebridge";
 import http from "http";
 
@@ -298,6 +298,22 @@ export class DoorbirdApi {
       hostname: url.hostname,
       method: "POST",
       path: "/bha-api/audio-transmit.cgi",
+      port: url.port || 80
+    });
+  }
+
+  // Open the Doorbird's audio stream (G.711 µ-law, 8 kHz). The Doorbird serves one consumer at a time, so only the audio relay calls this.
+  public audioReceiveRequest(): http.ClientRequest {
+    const url = new URL("http://" + this.doorbirdAddress);
+
+    return http.request({
+      agent: false,
+      headers: {
+        "Authorization": "Basic " + Buffer.from(this.username + ":" + this.password).toString("base64")
+      },
+      hostname: url.hostname,
+      method: "GET",
+      path: "/bha-api/audio-receive.cgi",
       port: url.port || 80
     });
   }

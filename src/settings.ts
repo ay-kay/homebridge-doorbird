@@ -39,3 +39,22 @@ export const STREAM_RETRY_DELAY = 1500;
 
 // Delay before we retry a failed snapshot request.
 export const SNAPSHOT_RETRY_DELAY = 600;
+
+// Audio relay: the one connection to the Doorbird's audio, served to FFmpeg locally. Times in milliseconds.
+export const AUDIO_RELAY_GAP_TOLERANCE = 300;   // How long we wait for the Doorbird before we fill the gap with silence.
+export const AUDIO_RELAY_MAX_QUEUE = 500;       // How much audio we keep queued at most; the Doorbird replays a few seconds on every reconnect.
+export const AUDIO_RELAY_PRIME = 200;           // How much audio we gather before playback to a new client starts.
+export const AUDIO_RELAY_RECONNECT_MAX = 10000; // Longest pause between reconnect attempts after repeated failures.
+export const AUDIO_RELAY_TICK = 32;             // How often we pace audio out to FFmpeg.
+
+// Livestream buffer: one FFmpeg per Doorbird turns the RTSP video and the relayed audio into fragmented MP4 that feeds the live view and
+// HomeKit Secure Video. Times in milliseconds.
+export const LIVESTREAM_SEGMENT_LENGTH = 100;         // Fragment length. Smaller is more precise for HKSV at trivial cost.
+export const LIVESTREAM_BUFFER_DURATION = 10000;      // How much we keep: at least two Doorbird keyframe intervals (3 s at night) plus the HKSV prebuffer.
+export const LIVESTREAM_IDLE_TIMEOUT = 60000;         // How long the buffer keeps running after the last consumer is gone.
+export const LIVESTREAM_MAX_START_BACKLOG = 1000;      // A live view starts from the last keyframe only if it is at most this old, else it waits for the next.
+export const LIVESTREAM_READY_TIMEOUT = 8000;         // How long a live view waits for the buffer to deliver its first keyframe before falling back.
+export const LIVESTREAM_RESTART_DELAY = 2000;         // Pause before we restart FFmpeg after it died, with nobody waiting.
+export const LIVESTREAM_RESTART_DELAY_ACTIVE = 500;   // ... and with consumers waiting.
+export const LIVESTREAM_RESTART_DELAY_MAX = 30000;    // Longest pause between restarts after repeated failures.
+export const LIVESTREAM_FAILURE_LOG_THRESHOLD = 3;    // Consecutive failures before we warn.

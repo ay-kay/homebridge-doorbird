@@ -12,19 +12,20 @@
  */
 "use strict";
 
-const assert = require("node:assert/strict");
-const { test } = require("node:test");
-const { spawn } = require("node:child_process");
-const crypto = require("node:crypto");
-const dgram = require("node:dgram");
-const http = require("node:http");
-const util = require("node:util");
-const { DoorbirdApi } = require("../dist/doorbird-api");
-const { DoorbirdAudioProxy } = require("../dist/doorbird-audio-proxy");
-const { SrtpEncryptContext, deriveSrtpSessionKeys } = require("../dist/doorbird-rtp");
-const { DoorbirdTalkback } = require("../dist/doorbird-talkback");
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { spawn } from "node:child_process";
+import crypto from "node:crypto";
+import dgram from "node:dgram";
+import http from "node:http";
+import util from "node:util";
+import { DoorbirdApi } from "../dist/doorbird-api.js";
+import { DoorbirdAudioProxy } from "../dist/doorbird-audio-proxy.js";
+import { SrtpEncryptContext, deriveSrtpSessionKeys } from "../dist/doorbird-rtp.js";
+import { DoorbirdTalkback } from "../dist/doorbird-talkback.js";
 
-const ffmpegPath = require("ffmpeg-for-homebridge") || "ffmpeg";
+import pathToFfmpeg from "ffmpeg-for-homebridge";
+const ffmpegPath = pathToFfmpeg || "ffmpeg";
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // Send a few seconds of a 1 kHz tone the way HomeKit sends return audio.

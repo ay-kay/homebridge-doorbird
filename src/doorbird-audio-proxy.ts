@@ -19,7 +19,7 @@ import {
   classifyRtpPacket,
   deriveSrtpSessionKeys,
   rtpPayloadType
-} from "./doorbird-rtp";
+} from "./doorbird-rtp.js";
 import { RemoteInfo, Socket, createSocket } from "dgram";
 import { isIPv6 } from "net";
 
