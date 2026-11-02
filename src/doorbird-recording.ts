@@ -10,6 +10,7 @@ import { BackpressureWriter, FfmpegOptions, FfmpegRecordingProcess, HKSV_TIMEOUT
 import { CameraController, CameraRecordingConfiguration, CameraRecordingDelegate, HAP, HDSProtocolSpecificErrorReason, Logging, PlatformAccessory, RecordingPacket }
   from "homebridge";
 import { DoorbirdLivestream, SegmentRole } from "./doorbird-livestream.js";
+import { RECORDING_EARLY_END_WARNING, RECORDING_VIDEO_AGE_WARNING } from "./settings.js";
 
 // A single zero byte with isLast tells HomeKit there is nothing to record.
 const END_OF_STREAM = Buffer.alloc(1, 0);
@@ -44,6 +45,7 @@ export class DoorbirdRecordingDelegate implements CameraRecordingDelegate {
   private recordingActive = false;
   private segmentListener?: (data: Buffer, role: SegmentRole) => void;
   private session = { declined: false, id: 0, segmentsIn: 0, segmentsOut: 0, started: 0 };
+  private earlyEnds = 0;
   private transmitting = false;
   private readonly verbose: boolean;
   private writer?: BackpressureWriter;
@@ -288,6 +290,7 @@ export class DoorbirdRecordingDelegate implements CameraRecordingDelegate {
     const seconds = (this.session.segmentsIn * this.livestream.segmentLength) / 1000;
 
     if(reason === this.hap.HDSProtocolSpecificErrorReason.NORMAL) {
+      this.earlyEnds = 0;
       this.log.info("%s: HKSV: recorded %s seconds for HomeKit.", this.name, Math.round(seconds));
       return;
     }
@@ -296,14 +299,24 @@ export class DoorbirdRecordingDelegate implements CameraRecordingDelegate {
       return;
     }
 
+    this.earlyEnds++;
+
     const descriptions: Record<number, string> = {
       [this.hap.HDSProtocolSpecificErrorReason.CANCELLED]: "HomeKit cancelled the request.",
-      [this.hap.HDSProtocolSpecificErrorReason.TIMEOUT]: "the request timed out. This happens occasionally and can be ignored.",
-      [this.hap.HDSProtocolSpecificErrorReason.UNEXPECTED_FAILURE]: "the request was slow to respond. This happens occasionally and can be ignored."
+      [this.hap.HDSProtocolSpecificErrorReason.TIMEOUT]: "the request timed out.",
+      [this.hap.HDSProtocolSpecificErrorReason.UNEXPECTED_FAILURE]: "the request was slow to respond."
     };
 
-    this.log.warn("%s: HKSV recording event ended early after %s seconds: %s", this.name, Math.round(seconds),
-      descriptions[reason] ?? ("reason " + reason.toString() + "."));
+    // An occasional early end is normal. A run of them means HomeKit is not getting video, usually because the buffer has none: say so instead of
+    // repeating that it can be ignored.
+    const videoAge = this.livestream.videoAge;
+    const hint = (videoAge > RECORDING_VIDEO_AGE_WARNING) ?
+      " The buffer has had no video from the Doorbird for " + (Number.isFinite(videoAge) ? Math.round(videoAge / 1000).toString() + " seconds." : "a while.") :
+      (this.earlyEnds >= RECORDING_EARLY_END_WARNING) ? " That is " + this.earlyEnds.toString() + " early ends in a row, check the Doorbird's video." :
+        " This happens occasionally and can be ignored.";
+
+    this.log.warn("%s: HKSV recording event ended early after %s seconds: %s%s", this.name, Math.round(seconds),
+      descriptions[reason] ?? ("reason " + reason.toString() + "."), hint);
 
     if(timedOut || this.verbose) {
       stderr.slice(-5).forEach((line) => this.log.warn("%s: ffmpeg: %s", this.name, line));

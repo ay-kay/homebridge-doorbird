@@ -58,6 +58,8 @@ export const LIVESTREAM_RESTART_DELAY = 2000;         // Pause before we restart
 export const LIVESTREAM_RESTART_DELAY_ACTIVE = 500;   // ... and with consumers waiting.
 export const LIVESTREAM_RESTART_DELAY_MAX = 30000;    // Longest pause between restarts after repeated failures.
 export const LIVESTREAM_FAILURE_LOG_THRESHOLD = 3;    // Consecutive failures before we warn.
+export const LIVESTREAM_RTSP_TIMEOUT = 10000;         // Socket timeout for the RTSP input: FFmpeg gives up on a connection that falls silent for this long.
+export const LIVESTREAM_VIDEO_STALL_TIMEOUT = 15000;  // No video keyframe for this long while FFmpeg runs means the Doorbird's video is gone: restart FFmpeg.
 
 // Largest RTP packet FFmpeg may send to the audio proxy over loopback. FFmpeg does not split Opus packets, it aborts the stream when one is
 // larger than this. HomeKit's 60 ms packets on slow connections reach 180 bytes at 24 kbps, so leave ample room while staying under the MTU.
@@ -66,3 +68,8 @@ export const OPUS_RTP_PACKET_SIZE = 1200;
 // How many lines of FFmpeg's stderr we keep to explain an unexpected exit without debug logging. The decisive error line is often followed by
 // several lines of statistics, so a handful is not enough.
 export const FFMPEG_STDERR_TAIL = 15;
+
+// HKSV recordings that end early: after this many in a row, or when the buffer's last video keyframe is older than this, the warning names the
+// likely cause instead of calling it harmless. Times in milliseconds.
+export const RECORDING_EARLY_END_WARNING = 2;
+export const RECORDING_VIDEO_AGE_WARNING = 5000;

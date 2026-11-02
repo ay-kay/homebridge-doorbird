@@ -13,9 +13,11 @@ import {
   LIVESTREAM_RESTART_DELAY,
   LIVESTREAM_RESTART_DELAY_ACTIVE,
   LIVESTREAM_RESTART_DELAY_MAX,
-  LIVESTREAM_SEGMENT_LENGTH
+  LIVESTREAM_RTSP_TIMEOUT,
+  LIVESTREAM_SEGMENT_LENGTH,
+  LIVESTREAM_VIDEO_STALL_TIMEOUT
 } from "./settings.js";
-import { FfmpegLivestreamProcess, FfmpegOptions, isKeyframe } from "homebridge-plugin-utils";
+import { FfmpegOptions, LivestreamProcess, LivestreamProcessFactory, isKeyframe, livestreamProcessFactory } from "homebridge-plugin-utils";
 import { DoorbirdAudioRelay } from "./doorbird-audio-relay.js";
 import { EventEmitter } from "events";
 import { Logging } from "homebridge";
@@ -53,7 +55,11 @@ export interface LivestreamOptions {
   ffmpegOptions: FfmpegOptions;
   log: Logging;
   name: string;
+  // Builds the FFmpeg process. Tests substitute a double; production uses homebridge-plugin-utils' factory.
+  processFactory?: LivestreamProcessFactory;
   rtspUrl: string;
+  // No keyframe for this long while FFmpeg runs means the video is gone and FFmpeg is restarted.
+  videoStallTimeout?: number;
 }
 
 export class DoorbirdLivestream extends EventEmitter<LivestreamEvents> {
@@ -66,15 +72,20 @@ export class DoorbirdLivestream extends EventEmitter<LivestreamEvents> {
   private generation = 0;
   private idleTimer: NodeJS.Timeout | null = null;
   private _initSegment: Buffer | null = null;
+  private lastKeyframe = 0;
   private readonly log: Logging;
   private readonly name: string;
   private pendingDiscontinuity = false;
-  private process: FfmpegLivestreamProcess | null = null;
+  private process: LivestreamProcess | null = null;
+  private readonly processFactory: LivestreamProcessFactory;
   private restartTimer: NodeJS.Timeout | null = null;
   private readonly rtspUrl: string;
   private running = false;
   private readonly segmentCount = Math.max(Math.ceil(LIVESTREAM_BUFFER_DURATION / LIVESTREAM_SEGMENT_LENGTH), 1);
+  private stalled = false;
+  private stallTimer: NodeJS.Timeout | null = null;
   private transmitting = false;
+  private readonly videoStallTimeout: number;
 
   constructor(options: LivestreamOptions) {
     super();
@@ -84,7 +95,9 @@ export class DoorbirdLivestream extends EventEmitter<LivestreamEvents> {
     this.ffmpegOptions = options.ffmpegOptions;
     this.log = options.log;
     this.name = options.name;
+    this.processFactory = options.processFactory ?? livestreamProcessFactory;
     this.rtspUrl = options.rtspUrl;
+    this.videoStallTimeout = options.videoStallTimeout ?? LIVESTREAM_VIDEO_STALL_TIMEOUT;
   }
 
   // Consumers announce themselves. The buffer runs while anyone needs it and for a while after.
@@ -152,7 +165,9 @@ export class DoorbirdLivestream extends EventEmitter<LivestreamEvents> {
     const wasTransmitting = this.transmitting;
 
     this.transmitting = false;
-    this.process?.abort();
+    this.stalled = false;
+    this.disarmStallWatchdog();
+    void this.process?.[Symbol.asyncDispose]();
     this.process = null;
     this.audioRelay.stop();
     this.clearBuffer();
@@ -179,7 +194,7 @@ export class DoorbirdLivestream extends EventEmitter<LivestreamEvents> {
       return;
     }
 
-    const process = new FfmpegLivestreamProcess(this.ffmpegOptions, {
+    const process = this.processFactory.create(this.ffmpegOptions, {
       args: this.ffmpegArguments(),
       livestream: { url: this.rtspUrl }
     });
@@ -195,6 +210,7 @@ export class DoorbirdLivestream extends EventEmitter<LivestreamEvents> {
 
       this._initSegment = init;
       this.debug("%s: Livestream buffer connected.", this.name);
+      this.armStallWatchdog(process);
 
       for await (const fragment of process.segments()) {
         if(!this.running || (generation !== this.generation)) {
@@ -215,9 +231,10 @@ export class DoorbirdLivestream extends EventEmitter<LivestreamEvents> {
   }
 
   // FFmpeg is gone. Tell the consumers and try again.
-  private handleExit(process: FfmpegLivestreamProcess): void {
+  private handleExit(process: LivestreamProcess): void {
     const produced = this._initSegment !== null;
 
+    this.disarmStallWatchdog();
     this.process = null;
     this.failures = produced ? 0 : this.failures + 1;
     this.pendingDiscontinuity = true;
@@ -226,7 +243,7 @@ export class DoorbirdLivestream extends EventEmitter<LivestreamEvents> {
 
     if(this.failures === LIVESTREAM_FAILURE_LOG_THRESHOLD) {
       this.log.warn("%s: The livestream buffer cannot start, retrying. Last FFmpeg output:", this.name);
-      process.stderrLog.slice(-5).forEach((line) => this.log.warn("%s: ffmpeg: %s", this.name, line));
+      ("stderrLog" in process ? (process as { stderrLog: string[] }).stderrLog : []).slice(-5).forEach((line) => this.log.warn("%s: ffmpeg: %s", this.name, line));
     } else if(produced) {
       this.debug("%s: Livestream buffer ended, restarting.", this.name);
     }
@@ -248,6 +265,15 @@ export class DoorbirdLivestream extends EventEmitter<LivestreamEvents> {
   // Buffer a fragment, flag keyframes, and pass it on.
   private processFragment(data: Buffer): void {
     const keyframe = isKeyframe(data);
+
+    if(keyframe) {
+      this.lastKeyframe = Date.now();
+
+      if(this.stalled) {
+        this.stalled = false;
+        this.log.info("%s: Video from the Doorbird is back.", this.name);
+      }
+    }
 
     if(keyframe && this.pendingDiscontinuity) {
       this.pendingDiscontinuity = false;
@@ -276,6 +302,39 @@ export class DoorbirdLivestream extends EventEmitter<LivestreamEvents> {
     this.fragments = [];
   }
 
+  // The Doorbird can drop its video while FFmpeg's RTSP connection stays open and the audio keeps flowing: FFmpeg then produces audio-only fragments
+  // forever, live views wait for a keyframe that never comes, and HKSV records nothing. Measured once as a connection that went silent for 80
+  // minutes. If no keyframe arrives for a while, we end FFmpeg and the restart logic reconnects.
+  private armStallWatchdog(process: LivestreamProcess): void {
+    this.disarmStallWatchdog();
+    this.lastKeyframe = Date.now();
+
+    this.stallTimer = setInterval(() => {
+      const silence = Date.now() - this.lastKeyframe;
+
+      if((silence < this.videoStallTimeout) || (this.process !== process)) {
+        return;
+      }
+
+      if(this.stalled) {
+        this.debug("%s: Still no video from the Doorbird after %s seconds, restarting the stream again.", this.name, Math.round(silence / 1000));
+      } else {
+        this.stalled = true;
+        this.log.warn("%s: No video from the Doorbird for %s seconds, restarting the stream.", this.name, Math.round(silence / 1000));
+      }
+
+      this.disarmStallWatchdog();
+      void process[Symbol.asyncDispose]();
+    }, Math.max(Math.floor(this.videoStallTimeout / 3), 50));
+  }
+
+  private disarmStallWatchdog(): void {
+    if(this.stallTimer) {
+      clearInterval(this.stallTimer);
+      this.stallTimer = null;
+    }
+  }
+
   // The FFmpeg command line: low-latency inputs, video copied, audio as PCM so consumers encode it exactly once, 100 ms fragments.
   private ffmpegArguments(): string[] {
     return [
@@ -287,6 +346,8 @@ export class DoorbirdLivestream extends EventEmitter<LivestreamEvents> {
       "-probesize", "32",
       "-analyzeduration", "0",
       "-rtsp_transport", "tcp",
+      // Give up on an RTSP connection that falls silent instead of blocking forever on a dead socket.
+      "-timeout", (LIVESTREAM_RTSP_TIMEOUT * 1000).toString(),
       "-i", this.rtspUrl,
       "-fflags", "nobuffer",
       "-flags", "low_delay",
@@ -327,6 +388,11 @@ export class DoorbirdLivestream extends EventEmitter<LivestreamEvents> {
 
   public get isTransmitting(): boolean {
     return this.transmitting;
+  }
+
+  // Milliseconds since the last video keyframe arrived, Infinity if FFmpeg is not producing.
+  public get videoAge(): number {
+    return (this.process && this._initSegment) ? Date.now() - this.lastKeyframe : Infinity;
   }
 
   // How much is buffered, in milliseconds.

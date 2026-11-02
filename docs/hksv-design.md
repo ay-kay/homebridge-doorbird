@@ -122,6 +122,12 @@ DoorBird, without breaking the live view, two-way audio and the relay lock that 
   keyframe costs up to 3 s at night but keeps the view live.
 - The first motion right after enabling recording may produce no clip: the hub selects the recording configuration a moment later.
 - Node reports the Doorbird's 21-minute audio close as an aborted response, not as a clean end.
+- On a slow mobile connection HomeKit asks for the 640x360 profile and 60 ms Opus packets. FFmpeg's RTP muxer never splits an Opus packet, it
+  aborts the stream when one exceeds `pkt_size`, so the loopback leg to the audio proxy needs a generous packet size (`OPUS_RTP_PACKET_SIZE`).
+- The Doorbird can drop its video while the RTSP TCP connection stays open and the audio keeps flowing (seen once: 80 minutes of silence on
+  port 8557 while port 80 kept delivering audio). FFmpeg produced audio-only fragments forever, live views waited for a keyframe that never came,
+  and every HKSV recording ended after 0 seconds. The buffer now passes `-timeout` to the RTSP input and restarts FFmpeg when no keyframe
+  arrives for `LIVESTREAM_VIDEO_STALL_TIMEOUT`.
 
 ## 6. Open risks
 
