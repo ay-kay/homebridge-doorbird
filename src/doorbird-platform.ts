@@ -3,10 +3,10 @@
  * doorbird-platform.ts: homebridge-doorbird platform class.
  */
 import daynight from "daynight";
-import { DoorbirdStation } from "./doorbird-station";
-import { DoorbirdConfig } from "./doorbird-types";
+import { DoorbirdStation } from "./doorbird-station.js";
+import { DoorbirdConfig } from "./doorbird-types.js";
 import { API, APIEvent, DynamicPlatformPlugin, Logging, PlatformAccessory, PlatformConfig } from "homebridge";
-import { DOORBIRD_FFMPEG_OPTIONS } from "./settings";
+import { DOORBIRD_FFMPEG_OPTIONS } from "./settings.js";
 import util from "util";
 
 export class DoorbirdPlatform implements DynamicPlatformPlugin {
@@ -92,7 +92,8 @@ export class DoorbirdPlatform implements DynamicPlatformPlugin {
 
   // Utility function to determine whether it's day or night.
   isNight(): boolean {
-    const dayNight = daynight();
+    // daynight is a CommonJS module with a default export; under ESM the import is the module namespace.
+    const dayNight = daynight.default();
 
     // If we can't figure out if it's night, always assume it's day.
     return dayNight.error ? false : dayNight.dark;

@@ -9,7 +9,7 @@ import { ChildProcess, spawn } from "child_process";
 import { Socket, createSocket } from "dgram";
 import execa from "execa";
 import { Logging, StreamRequestCallback } from "homebridge";
-import { DoorbirdStreamingDelegate } from "./doorbird-stream";
+import { DoorbirdStreamingDelegate } from "./doorbird-stream.js";
 
 export class FfmpegProcess {
   private readonly debug: (message: string, ...parameters: any[]) => void;

@@ -3,11 +3,11 @@
  * doorbird-doorbell.ts:Doorbird doorbell device class.
  */
 import { exec } from "child_process";
-import { DoorbirdApi } from "./doorbird-api";
-import { FfmpegProcess } from "./doorbird-ffmpeg";
-import { DoorbirdPlatform } from "./doorbird-platform";
-import { DoorbirdStreamingDelegate } from "./doorbird-stream";
-import { DoorbirdStationConfig } from "./doorbird-types";
+import { DoorbirdApi } from "./doorbird-api.js";
+import { FfmpegProcess } from "./doorbird-ffmpeg.js";
+import { DoorbirdPlatform } from "./doorbird-platform.js";
+import { DoorbirdStreamingDelegate } from "./doorbird-stream.js";
+import { DoorbirdStationConfig } from "./doorbird-types.js";
 import {
   API,
   CharacteristicEventTypes,
@@ -24,7 +24,7 @@ import {
   DOORBIRD_UNLOCK_DURATION,
   PLATFORM_NAME,
   PLUGIN_NAME
-} from "./settings";
+} from "./settings.js";
 
 export class DoorbirdStation {
   accessory!: PlatformAccessory;

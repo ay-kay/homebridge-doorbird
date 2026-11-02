@@ -4,10 +4,10 @@
  */
 import { API } from "homebridge";
 
-import { PLUGIN_NAME, PLATFORM_NAME } from "./settings";
-import { DoorbirdPlatform } from "./doorbird-platform";
+import { PLUGIN_NAME, PLATFORM_NAME } from "./settings.js";
+import { DoorbirdPlatform } from "./doorbird-platform.js";
 
 // Register our platform with homebridge.
-export = (api: API) => {
+export default (api: API): void => {
   api.registerPlatform(PLUGIN_NAME, PLATFORM_NAME, DoorbirdPlatform);
-}
+};

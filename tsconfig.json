@@ -1,23 +1,19 @@
 {
   "compilerOptions": {
-    "target": "ES2018",
-    "module": "commonjs",
+    "target": "ES2022",
+    "module": "NodeNext",
     "lib": [
-      "ES2015",
-      "ES2016",
-      "ES2017",
-      "ES2018",
-      "ES2019",
+      "ES2022",
       "dom"
     ],
     "sourceMap": true,
     "rootDir": "src",
     "outDir": "dist",
-
     "strict": true,
     "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true,
-    "skipLibCheck": true
+    "skipLibCheck": true,
+    "moduleResolution": "NodeNext"
   },
   "include": [
     "src"

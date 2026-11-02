@@ -1,13 +1,13 @@
 /* Unit tests for the RTP and SRTP helpers. Run with: npm run build && node test/rtp-unit.test.js */
 "use strict";
 
-const assert = require("node:assert/strict");
-const { test } = require("node:test");
-const crypto = require("node:crypto");
-const {
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import crypto from "node:crypto";
+import {
   OPUS_RTP_CLOCK_RATE, RtpTimestampScaler, SrtpDecryptContext, SrtpEncryptContext, classifyRtpPacket, deriveSrtpKey, deriveSrtpSessionKeys,
   rtpHeaderLength, rtpPayloadType, scaleRtpTimestamp
-} = require("../dist/doorbird-rtp");
+} from "../dist/doorbird-rtp.js";
 
 const hex = (s) => Buffer.from(s.replace(/\s+/g, ""), "hex");
 

@@ -5,14 +5,16 @@
  * This module is heavily inspired by the homebridge and homebridge-camera-ffmpeg source code and
  * borrows heavily from both. Thank you for your contributions to the HomeKit world.
  */
-import { DoorbirdAudioProxy, opusFfmpegOutput } from "./doorbird-audio-proxy";
-import { FfmpegProcess } from "./doorbird-ffmpeg";
-import { DoorbirdPlatform } from "./doorbird-platform";
+import { DoorbirdAudioProxy, opusFfmpegOutput } from "./doorbird-audio-proxy.js";
+import { FfmpegProcess } from "./doorbird-ffmpeg.js";
+import { DoorbirdPlatform } from "./doorbird-platform.js";
 import { ClientRequest } from "http";
-import { DoorbirdStation } from "./doorbird-station";
-import { DoorbirdTalkback } from "./doorbird-talkback";
-import { DOORBIRD_TALKBACK_IDLE_TIMEOUT, SNAPSHOT_RETRY_DELAY, STREAM_RETRIES, STREAM_RETRY_DELAY } from "./settings";
+import { DoorbirdStation } from "./doorbird-station.js";
+import { DoorbirdTalkback } from "./doorbird-talkback.js";
+import { DOORBIRD_TALKBACK_IDLE_TIMEOUT, SNAPSHOT_RETRY_DELAY, STREAM_RETRIES, STREAM_RETRY_DELAY } from "./settings.js";
 import getPort from "get-port";
+// A precompiled ffmpeg binary that meets our requirements, if available.
+import pathToFfmpeg from "ffmpeg-for-homebridge";
 import {
   API,
   APIEvent,
@@ -35,8 +37,6 @@ import {
   StreamRequestTypes
 } from "homebridge";
 
-// Bring in a precompiled ffmpeg binary that meets our requirements, if available.
-const pathToFfmpeg = require("ffmpeg-for-homebridge"); // eslint-disable-line @typescript-eslint/no-var-requires
 
 type SessionInfo = {
   address: string; // Address of the HAP controller.

@@ -2,10 +2,10 @@
  *
  * doorbird-api.ts: Our Doorbird API implementation.
  */
-import { DOORBIRD_API_RESPONSE_TIME, DOORBIRD_HEARTBEAT_INTERVAL, DOORBIRD_REBOOT_DURATION } from "./settings";
-import { DoorbirdDeviceDetail, DoorbirdDeviceInformation } from "./doorbird-types";
+import { DOORBIRD_API_RESPONSE_TIME, DOORBIRD_HEARTBEAT_INTERVAL, DOORBIRD_REBOOT_DURATION } from "./settings.js";
+import { DoorbirdDeviceDetail, DoorbirdDeviceInformation } from "./doorbird-types.js";
 import fetch, { FetchError, RequestInfo, RequestInit, Response } from "node-fetch";
-import { DoorbirdPlatform } from "./doorbird-platform";
+import { DoorbirdPlatform } from "./doorbird-platform.js";
 import { Logging } from "homebridge";
 import http from "http";
 
