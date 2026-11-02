@@ -11,6 +11,7 @@ import { Writable } from "stream";
 import execa from "execa";
 import { Logging, StreamRequestCallback } from "homebridge";
 import { DoorbirdStreamingDelegate } from "./doorbird-stream.js";
+import { FFMPEG_STDERR_TAIL } from "./settings.js";
 
 export class FfmpegProcess {
   private readonly debug: (message: string, ...parameters: any[]) => void;
@@ -83,7 +84,7 @@ export class FfmpegProcess {
         // Keep the last few lines so we can explain an unexpected exit even without debug logging.
         data.toString().split(/\n/).forEach((line: string) => {
           if(line.trim().length) {
-            this.stderrTail = this.stderrTail.concat(line.trim()).slice(-5);
+            this.stderrTail = this.stderrTail.concat(line.trim()).slice(-FFMPEG_STDERR_TAIL);
           }
 
           // Debugging and additional logging, if requested.

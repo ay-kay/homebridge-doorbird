@@ -37,9 +37,15 @@ test("FFmpeg Opus output for the audio proxy", () => {
 
   assert.equal(opusFfmpegOutput(output),
     "-vn -c:a libopus -application lowdelay -ac 1 -ar 16k -b:a 24k -bufsize 96k -frame_duration 20 -payload_type 110 -ssrc 12345" +
-    " -rtpflags skip_rtcp -f rtp rtp://127.0.0.1:45678?pkt_size=188");
+    " -rtpflags skip_rtcp -f rtp rtp://127.0.0.1:45678?pkt_size=1200");
 
   assert.match(opusFfmpegOutput({ ...output, packetTime: 60, sampleRate: 24 }), / -ar 24k .* -frame_duration 60 /);
+
+  // HomeKit asks for 60 ms packets on slow connections. Those exceed the 176 bytes an AAC-era pkt_size=188 allowed, and FFmpeg aborts the
+  // whole stream on the first Opus packet that does not fit, so the packet size must leave plenty of room.
+  const packetSize = Number(/pkt_size=(\d+)$/.exec(opusFfmpegOutput({ ...output, packetTime: 60 }))[1]);
+
+  assert.ok(packetSize >= 600 && packetSize <= 1400, "pkt_size " + packetSize + " should be well above 60 ms Opus packets and below the MTU");
 
   // libopus can't do 30 ms frames.
   assert.match(opusFfmpegOutput({ ...output, packetTime: 30 }), / -frame_duration 20 /);

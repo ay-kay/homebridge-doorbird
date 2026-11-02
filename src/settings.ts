@@ -58,3 +58,11 @@ export const LIVESTREAM_RESTART_DELAY = 2000;         // Pause before we restart
 export const LIVESTREAM_RESTART_DELAY_ACTIVE = 500;   // ... and with consumers waiting.
 export const LIVESTREAM_RESTART_DELAY_MAX = 30000;    // Longest pause between restarts after repeated failures.
 export const LIVESTREAM_FAILURE_LOG_THRESHOLD = 3;    // Consecutive failures before we warn.
+
+// Largest RTP packet FFmpeg may send to the audio proxy over loopback. FFmpeg does not split Opus packets, it aborts the stream when one is
+// larger than this. HomeKit's 60 ms packets on slow connections reach 180 bytes at 24 kbps, so leave ample room while staying under the MTU.
+export const OPUS_RTP_PACKET_SIZE = 1200;
+
+// How many lines of FFmpeg's stderr we keep to explain an unexpected exit without debug logging. The decisive error line is often followed by
+// several lines of statistics, so a handful is not enough.
+export const FFMPEG_STDERR_TAIL = 15;

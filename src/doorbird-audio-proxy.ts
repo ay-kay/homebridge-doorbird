@@ -21,6 +21,7 @@ import {
   rtpPayloadType
 } from "./doorbird-rtp.js";
 import { RemoteInfo, Socket, createSocket } from "dgram";
+import { OPUS_RTP_PACKET_SIZE } from "./settings.js";
 import { isIPv6 } from "net";
 
 // Whoever consumes the decrypted return audio.
@@ -77,9 +78,11 @@ export function opusFfmpegOutput(options: OpusOutputOptions): string {
     // The audio and the video come from two independent Doorbird sources without a common clock, so the RTCP sender reports FFmpeg would emit per
     // stream describe an A/V offset that does not exist. iOS tries to lip-sync against them and the audio stutters.
     "-rtpflags skip_rtcp",
-    // Plain RTP to our proxy, which rewrites the timestamps to the negotiated clock and encrypts the stream for HomeKit. 188 bytes as before.
+    // Plain RTP to our proxy, which rewrites the timestamps to the negotiated clock and encrypts the stream for HomeKit. The packet size is the
+    // largest RTP packet FFmpeg may send over loopback: FFmpeg never splits an Opus packet but aborts the whole stream when one exceeds it. The
+    // 60 ms packets HomeKit asks for on a slow connection already reach 180 bytes at 24 kbps, so the old AAC-era 188 is far too tight.
     "-f rtp",
-    "rtp://127.0.0.1:" + options.port.toString() + "?pkt_size=188"
+    "rtp://127.0.0.1:" + options.port.toString() + "?pkt_size=" + OPUS_RTP_PACKET_SIZE.toString()
   ].join(" ");
 }
 
