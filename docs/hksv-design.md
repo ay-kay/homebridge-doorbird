@@ -1,6 +1,6 @@
 # HomeKit Secure Video for homebridge-doorbird: design notes
 
-Status: draft, 2026-11-02. Goal: recordings and object detection in the Home app (HomeKit Secure Video, HKSV) for the
+Status: implemented 2026-11-02 (phases 1 to 3 done and verified with a real recording; phase 4 is ongoing hardening). Goal: recordings and object detection in the Home app (HomeKit Secure Video, HKSV) for the
 DoorBird, without breaking the live view, two-way audio and the relay lock that already work.
 
 ## 1. What we measured on the DoorBird (D2101FV, firmware as of 2026-11)
@@ -112,7 +112,18 @@ DoorBird, without breaking the live view, two-way audio and the relay lock that 
    and rings. Watch Homebridge log for close reasons.
 4. Hardening: discontinuity restarts, reconnect storms, CPU on the one-core VM, documentation, upstream-ready split of commits.
 
-## 5. Open risks
+## 5. What we learned while building it
+
+- `homebridge-plugin-utils` is ESM only and its exports map has no `require` entry, so the plugin had to move to ES modules first.
+- The static ffmpeg build fully buffers stderr and `-progress` output when not attached to a terminal; measurement scripts need a pseudo-terminal.
+- The encoder's keyframe interval in `homebridge-plugin-utils` is counted in frames (`-g fps*4`). With the Doorbird's 8 fps at night that gave 7.5 s
+  between keyframes and HomeKit's 5 s timer killed every recording. Forcing the selected frame rate with an `fps=` filter fixed it.
+- Starting a live view from a keyframe older than about a second leaves the viewer that far behind for the whole session; waiting for the next
+  keyframe costs up to 3 s at night but keeps the view live.
+- The first motion right after enabling recording may produce no clip: the hub selects the recording configuration a moment later.
+- Node reports the Doorbird's 21-minute audio close as an aborted response, not as a clean end.
+
+## 6. Open risks
 
 - HomeKit's acceptance of our fragments is only testable end to end on the real home hub.
 - One vCPU on the VM: libx264 recording plus Opus live encoding at the same time is the worst case. Measure in phase 3.
