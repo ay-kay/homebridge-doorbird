@@ -22,10 +22,9 @@ RUN npm install --omit=dev --no-fund --no-audit homebridge@^2 /tmp/homebridge-do
     mkdir /data && chown node:node /data
 COPY docker/doorbird-check.js ./
 
-# config.json, pairing data (persist/) and cached accessories live here.
+# config.json, pairing data (persist/) and cached accessories live here. Set TZ in the environment (see docker-compose.yml) for local timestamps.
 VOLUME /data
 USER node
-ENV TZ=Europe/Berlin
 
 # --strict-plugin-resolution with -P: load plugins from this image only, never from anywhere else.
 ENTRYPOINT ["/usr/bin/tini", "--"]

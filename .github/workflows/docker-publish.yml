@@ -1,12 +1,11 @@
 # Build the Docker image (Homebridge with this plugin only) and publish it to the GitHub Container Registry.
 #
-# Every branch push publishes ghcr.io/<owner>/<repo>:<branch>, the default branch also publishes :latest and version tags publish :X.Y.Z.
-# Pull requests only build the image.
+# Pushes to master publish ghcr.io/<owner>/<repo>:master and :latest, version tags publish :X.Y.Z. Pull requests only build the image.
 name: "Docker Publish"
 
 on:
   push:
-    branches: [ "**" ]
+    branches: [ "master" ]
     tags: [ "v*" ]
   pull_request:
   workflow_dispatch:

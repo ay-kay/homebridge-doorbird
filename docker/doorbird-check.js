@@ -32,8 +32,8 @@ async function get(doorbird, path, auth = true) {
   }
 }
 
-function report(ok, label, detail) {
-  console.log("  " + (ok ? "OK  " : "FAIL") + "  " + label + (detail ? ": " + detail : ""));
+function report(ok, label, detail, warning = false) {
+  console.log("  " + (ok ? "OK  " : (warning ? "WARN" : "FAIL")) + "  " + label + (detail ? ": " + detail : ""));
 
   return ok;
 }
@@ -71,8 +71,9 @@ async function check(doorbird) {
     return false;
   }
 
+  // Slow answers are a warning: the plugin waits 3000 ms for the Doorbird and may give up on a slow network.
   if(info.ms > 3000) {
-    report(false, "response time", info.ms + " ms, the plugin waits 3000 ms");
+    report(false, "response time", info.ms + " ms, the plugin waits 3000 ms", true);
   }
 
   // Snapshots and live video need the "watch always" permission. Without it, the Doorbird answers 204 with no image.
