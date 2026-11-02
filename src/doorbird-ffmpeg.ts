@@ -7,6 +7,7 @@
  */
 import { ChildProcess, spawn } from "child_process";
 import { Socket, createSocket } from "dgram";
+import { Writable } from "stream";
 import execa from "execa";
 import { Logging, StreamRequestCallback } from "homebridge";
 import { DoorbirdStreamingDelegate } from "./doorbird-stream.js";
@@ -133,6 +134,11 @@ export class FfmpegProcess {
         }
       }
     });
+  }
+
+  // FFmpeg's standard input, for sessions fed from the livestream buffer.
+  public get stdin(): Writable | null {
+    return this.process.stdin;
   }
 
   // Close the watchdog socket.

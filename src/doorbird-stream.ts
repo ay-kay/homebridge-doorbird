@@ -11,7 +11,9 @@ import { DoorbirdPlatform } from "./doorbird-platform.js";
 import { ClientRequest } from "http";
 import { DoorbirdStation } from "./doorbird-station.js";
 import { DoorbirdTalkback } from "./doorbird-talkback.js";
-import { DOORBIRD_TALKBACK_IDLE_TIMEOUT, SNAPSHOT_RETRY_DELAY, STREAM_RETRIES, STREAM_RETRY_DELAY } from "./settings.js";
+import { DOORBIRD_TALKBACK_IDLE_TIMEOUT, LIVESTREAM_MAX_START_BACKLOG, LIVESTREAM_READY_TIMEOUT, SNAPSHOT_RETRY_DELAY, STREAM_RETRIES, STREAM_RETRY_DELAY } from "./settings.js";
+import { BackpressureWriter, isKeyframe } from "homebridge-plugin-utils";
+import { DoorbirdLivestream } from "./doorbird-livestream.js";
 import getPort from "get-port";
 // A precompiled ffmpeg binary that meets our requirements, if available.
 import pathToFfmpeg from "ffmpeg-for-homebridge";
@@ -74,6 +76,7 @@ export class DoorbirdStreamingDelegate implements CameraStreamingDelegate {
   ongoingSessions: Record<string, FfmpegProcess> = {};
   audioSessions: Record<string, DoorbirdAudioProxy> = {};
   private launches: Record<string, { attempts: number, command: string, videoReturnPort: number }> = {};
+  private bufferSessions: Record<string, { livestream: DoorbirdLivestream, onFragment: (data: Buffer) => void, onRestart: () => void, writer: BackpressureWriter }> = {};
 
   constructor(doorbird: DoorbirdStation, twoWayAudio = false) {
     this.api = doorbird.api;
@@ -259,15 +262,44 @@ export class DoorbirdStreamingDelegate implements CameraStreamingDelegate {
       this.audioSessions[request.sessionID] = audioProxy;
     }
 
+    // Prefer the livestream buffer: it already holds the Doorbird's video and audio, so the view starts from the last keyframe right away,
+    // even while the Doorbird is busy with a ring, and the Doorbird's single audio channel stays with the buffer.
+    const livestream = this.doorbird.livestream;
+    let useBuffer = false;
+
+    if(livestream) {
+      livestream.acquire("live:" + request.sessionID);
+      useBuffer = await livestream.whenReady(LIVESTREAM_READY_TIMEOUT);
+
+      // The stream was stopped while we were waiting.
+      if(this.pendingSessions[request.sessionID] !== sessionInfo) {
+        livestream.release("live:" + request.sessionID);
+        callback(new Error(this.name + ": The stream was stopped before it started."));
+        return;
+      }
+
+      if(!useBuffer) {
+        this.log.warn("%s: The livestream buffer is not ready, streaming directly from the Doorbird.", this.name);
+        livestream.release("live:" + request.sessionID);
+      }
+    }
+
     // Low-latency input options: without them FFmpeg analyzes the inputs for several seconds, then flushes the backlog in a burst. The
     // iPhone plays video sequentially from that burst and stays 2-3 s behind for the whole session (measured: first packet after 6.4 s
     // and a 3 s backlog, versus 1.3 s and no backlog with these options).
     const lowLatency = "-fflags nobuffer -flags low_delay -probesize 32 -analyzeduration 0";
-    let fcmd = lowLatency + " -rtsp_transport tcp -i " + this.doorbird.cameraUrl;
+    let fcmd: string;
 
-    // Grab the audio URL and add it to the input pipeline.
-    if(audioProxy) {
-      fcmd += " " + lowLatency + " -f mulaw -ar 8000 -ac 1 -i " + this.doorbird.audioUrl;
+    if(useBuffer) {
+      // Fragmented MP4 from the buffer on standard input: video to copy, PCM audio to encode.
+      fcmd = lowLatency + " -f mp4 -i pipe:0";
+    } else {
+      fcmd = lowLatency + " -rtsp_transport tcp -i " + this.doorbird.cameraUrl;
+
+      // Grab the audio URL and add it to the input pipeline.
+      if(audioProxy) {
+        fcmd += " " + lowLatency + " -f mulaw -ar 8000 -ac 1 -i " + this.doorbird.audioUrl;
+      }
     }
 
     this.log("%s: HomeKit video stream requested: %sx%s, %s fps, %s kbps.",
@@ -275,7 +307,7 @@ export class DoorbirdStreamingDelegate implements CameraStreamingDelegate {
 
     // Configure our video parameters.
     const ffmpegVideoArgs =
-      " -map 0:0" +
+      " -map 0:v:0" +
       // The DoorBird already delivers H.264 that HomeKit plays back directly. Re-encoding added 1-2 s of latency and, because the DoorBird
       // delivers ~20 fps while announcing 30, two thirds of the frames were duplicates. Passing the stream through is what Home Assistant does.
       " -vcodec copy" +
@@ -297,7 +329,7 @@ export class DoorbirdStreamingDelegate implements CameraStreamingDelegate {
     // Configure the audio portion of the command line, but only if our version of FFmpeg supports libopus. FFmpeg encodes Opus and sends it as plain
     // RTP to our audio proxy, which rewrites the timestamps to the negotiated clock and encrypts the stream for HomeKit.
     if(audioProxy) {
-      fcmd += " -map 1:0 " + opusFfmpegOutput({
+      fcmd += (useBuffer ? " -map 0:a:0 " : " -map 1:a:0 ") + opusFfmpegOutput({
         bitrate: request.audio.max_bit_rate,
         packetTime: request.audio.packet_time,
         payloadType: request.audio.pt,
@@ -312,8 +344,10 @@ export class DoorbirdStreamingDelegate implements CameraStreamingDelegate {
       fcmd += " -loglevel debug"; // " -loglevel level+verbose";
     }
 
-    // Remember how we launched this session so we can retry if the Doorbird is busy.
-    this.launches[request.sessionID] = { attempts: 0, command: fcmd, videoReturnPort: sessionInfo.videoReturnPort };
+    // Remember how we launched this session so we can retry if the Doorbird is busy. Sessions fed from the buffer need no retries.
+    if(!useBuffer) {
+      this.launches[request.sessionID] = { attempts: 0, command: fcmd, videoReturnPort: sessionInfo.videoReturnPort };
+    }
 
     // Combine everything and start an instance of FFmpeg.
     const ffmpeg = new FfmpegProcess(this, request.sessionID, fcmd, sessionInfo.videoReturnPort, callback);
@@ -321,6 +355,49 @@ export class DoorbirdStreamingDelegate implements CameraStreamingDelegate {
     // Some housekeeping for our FFmpeg sessions.
     this.ongoingSessions[request.sessionID] = ffmpeg;
     delete this.pendingSessions[request.sessionID];
+
+    if(useBuffer && livestream) {
+      this.feedFromBuffer(request.sessionID, ffmpeg, livestream);
+    }
+  }
+
+  // Feed a live session from the livestream buffer: the init segment and everything since the last keyframe first, then each fragment as it arrives.
+  // If the last keyframe is too old to start from without lagging behind live, we wait for the next one instead.
+  private feedFromBuffer(sessionId: string, ffmpeg: FfmpegProcess, livestream: DoorbirdLivestream): void {
+    const writer = new BackpressureWriter(() => ffmpeg.stdin);
+    const head = livestream.fromLastKeyframe(LIVESTREAM_MAX_START_BACKLOG);
+    let started = false;
+
+    if(head) {
+      started = true;
+      writer.write(head).catch(() => { /* FFmpeg is gone, the exit handler ends the session. */ });
+    } else {
+      this.debug("%s: Waiting for the next keyframe to start the live view.", this.name);
+    }
+
+    const onFragment = (data: Buffer): void => {
+      if(!started) {
+        if(!isKeyframe(data) || !livestream.initSegment) {
+          return;
+        }
+
+        started = true;
+        writer.write(livestream.initSegment).catch(() => { /* FFmpeg is gone, the exit handler ends the session. */ });
+      }
+
+      writer.write(data).catch(() => { /* FFmpeg is gone, the exit handler ends the session. */ });
+    };
+
+    // The buffer's FFmpeg died: its timeline ends here, so does this session. HomeKit reconnects on its own if the user is still watching.
+    const onRestart = (): void => {
+      this.log.info("%s: The livestream buffer restarted, ending the live view.", this.name);
+      this.controller.forceStopStreamingSession(sessionId);
+      this.stopStream(sessionId);
+    };
+
+    livestream.on("fragment", onFragment);
+    livestream.once("restarting", onRestart);
+    this.bufferSessions[sessionId] = { livestream, onFragment, onRestart, writer };
   }
 
   // Start the audio proxy for a streaming session: it encrypts our audio for HomeKit, and relays the return audio to the Doorbird if two-way audio is
@@ -420,6 +497,16 @@ export class DoorbirdStreamingDelegate implements CameraStreamingDelegate {
     try {
       delete this.pendingSessions[sessionId];
       delete this.launches[sessionId];
+
+      const bufferSession = this.bufferSessions[sessionId];
+
+      if(bufferSession) {
+        bufferSession.livestream.off("fragment", bufferSession.onFragment);
+        bufferSession.livestream.off("restarting", bufferSession.onRestart);
+        bufferSession.writer.abort();
+        bufferSession.livestream.release("live:" + sessionId);
+        delete this.bufferSessions[sessionId];
+      }
 
       if(this.audioSessions[sessionId]) {
         this.audioSessions[sessionId].close();

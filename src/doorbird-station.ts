@@ -3,13 +3,17 @@
  * doorbird-doorbell.ts:Doorbird doorbell device class.
  */
 import { exec } from "child_process";
+import http from "http";
 import { DoorbirdApi } from "./doorbird-api.js";
+import { DoorbirdAudioRelay } from "./doorbird-audio-relay.js";
+import { DoorbirdLivestream } from "./doorbird-livestream.js";
 import { FfmpegProcess } from "./doorbird-ffmpeg.js";
 import { DoorbirdPlatform } from "./doorbird-platform.js";
 import { DoorbirdStreamingDelegate } from "./doorbird-stream.js";
 import { DoorbirdStationConfig } from "./doorbird-types.js";
 import {
   API,
+  APIEvent,
   CharacteristicEventTypes,
   CharacteristicGetCallback,
   CharacteristicSetCallback,
@@ -37,6 +41,7 @@ export class DoorbirdStation {
   platform: DoorbirdPlatform;
   debug: (message: string, ...parameters: any[]) => void;
   private hap: HAP;
+  livestream: DoorbirdLivestream | null = null;
   private lockEventTimers: { [index: string]: NodeJS.Timeout };
   private nightVision: boolean;
   private nightVisionTimer!: NodeJS.Timeout;
@@ -439,6 +444,37 @@ export class DoorbirdStation {
     // Configure the video stream and inform HomeKit about it.
     this.streamingDelegate = new DoorbirdStreamingDelegate(this, await this.twoWayAudioEnabled());
     this.accessory.configureController(this.streamingDelegate.controller);
+
+    // Configure the livestream buffer that feeds the live view.
+    await this.configureLivestream();
+
+    return true;
+  }
+
+  // Configure the livestream buffer: one FFmpeg holds the Doorbird's video and audio for all consumers. Audio.Enable is not required: the buffer
+  // always carries audio, the Doorbird's single audio channel belongs to it.
+  private async configureLivestream(): Promise<boolean> {
+    if(this.options.includes("VIDEO.BUFFER.DISABLE")) {
+      this.log("%s: Livestream buffer disabled, streaming directly from the Doorbird.", this.name);
+      return false;
+    }
+
+    const ffmpegOptions = await this.platform.ffmpegOptions(this.name);
+
+    if(!ffmpegOptions) {
+      this.log.warn("%s: Unable to query FFmpeg, streaming directly from the Doorbird.", this.name);
+      return false;
+    }
+
+    const audioRelay = new DoorbirdAudioRelay({
+      debug: this.debug,
+      log: this.log,
+      name: this.name,
+      openReceive: (): http.ClientRequest => this.dbApi.audioReceiveRequest()
+    });
+
+    this.livestream = new DoorbirdLivestream({ audioRelay, debug: this.debug, ffmpegOptions, log: this.log, name: this.name, rtspUrl: this.cameraUrl });
+    this.api.on(APIEvent.SHUTDOWN, () => this.livestream?.stop());
 
     return true;
   }

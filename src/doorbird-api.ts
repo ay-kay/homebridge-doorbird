@@ -302,6 +302,22 @@ export class DoorbirdApi {
     });
   }
 
+  // Open the Doorbird's audio stream (G.711 µ-law, 8 kHz). The Doorbird serves one consumer at a time, so only the audio relay calls this.
+  public audioReceiveRequest(): http.ClientRequest {
+    const url = new URL("http://" + this.doorbirdAddress);
+
+    return http.request({
+      agent: false,
+      headers: {
+        "Authorization": "Basic " + Buffer.from(this.username + ":" + this.password).toString("base64")
+      },
+      hostname: url.hostname,
+      method: "GET",
+      path: "/bha-api/audio-receive.cgi",
+      port: url.port || 80
+    });
+  }
+
   // Return the URL for the Doorbird MJPEG video stream.
   public videoUrl(): string {
 

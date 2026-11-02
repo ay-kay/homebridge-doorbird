@@ -6,7 +6,9 @@ import daynight from "daynight";
 import { DoorbirdStation } from "./doorbird-station.js";
 import { DoorbirdConfig } from "./doorbird-types.js";
 import { API, APIEvent, DynamicPlatformPlugin, Logging, PlatformAccessory, PlatformConfig } from "homebridge";
+import { FfmpegCodecs, FfmpegOptions, HomebridgePluginLogging } from "homebridge-plugin-utils";
 import { DOORBIRD_FFMPEG_OPTIONS } from "./settings.js";
+import { DoorbirdStreamingDelegate } from "./doorbird-stream.js";
 import util from "util";
 
 export class DoorbirdPlatform implements DynamicPlatformPlugin {
@@ -16,6 +18,7 @@ export class DoorbirdPlatform implements DynamicPlatformPlugin {
   readonly log: Logging;
   readonly api: API;
   private readonly doorbirds: DoorbirdStation[] = [];
+  private ffmpegCodecs?: Promise<FfmpegCodecs | null>;
 
   constructor(log: Logging, config: PlatformConfig, api: API) {
     this.api = api;
@@ -88,6 +91,40 @@ export class DoorbirdPlatform implements DynamicPlatformPlugin {
 
       this.doorbirds.push(new DoorbirdStation(this, doorbirdStationConfig));
     }
+  }
+
+  // FFmpeg options for homebridge-plugin-utils' FFmpeg processes. FFmpeg is probed once for all Doorbirds.
+  async ffmpegOptions(name: string): Promise<FfmpegOptions | null> {
+    const log = this.pluginLogger();
+
+    this.ffmpegCodecs ??= FfmpegCodecs.probe({ ffmpegExec: DoorbirdStreamingDelegate.videoProcessor(this), log }).catch((error: unknown) => {
+      this.log.error("Unable to probe FFmpeg: %s", error instanceof Error ? error.message : error);
+      return null;
+    });
+
+    const codecSupport = await this.ffmpegCodecs;
+
+    if(!codecSupport) {
+      return null;
+    }
+
+    return new FfmpegOptions({ codecSupport, debug: this.debugMode, hardwareDecoding: false, hardwareTranscoding: false, log, name: () => name });
+  }
+
+  // A logger for homebridge-plugin-utils that never prints Doorbird credentials: its FFmpeg command lines contain the RTSP URL.
+  private pluginLogger(): HomebridgePluginLogging {
+    const redact = (message: string): string => message.replace(/(\w+:\/\/)[^@\s/]+@/g, "$1<redacted>@");
+    const wrap = (level: "debug" | "error" | "info" | "warn") => (message: string, ...parameters: unknown[]): void => {
+      const text = redact(util.format(message, ...parameters));
+
+      if(level === "debug") {
+        this.debug(text);
+      } else {
+        this.log[level](text);
+      }
+    };
+
+    return { debug: wrap("debug"), error: wrap("error"), info: wrap("info"), warn: wrap("warn") };
   }
 
   // Utility function to determine whether it's day or night.
