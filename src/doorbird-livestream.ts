@@ -2,7 +2,7 @@
  *
  * doorbird-livestream.ts: One stream per Doorbird, buffered, for the live view and HomeKit Secure Video.
  *
- * The buffer logic follows the timeshift buffer in homebridge-unifi-protect (Copyright(C) 2017-2026, HJD, ISC license): FFmpeg turns the Doorbird's
+ * The buffer logic follows the timeshift buffer in homebridge-unifi-protect (Copyright(C) 2017-2026, HJD, ISC license, see "Third-party code" in README.md): FFmpeg turns the Doorbird's
  * RTSP video and the relayed audio into fragmented MP4 in 100 ms fragments, we keep the last few seconds of them, flag the ones that start with a
  * keyframe, and hand consumers the init segment plus fragments from a keyframe onwards followed by the live fragments as they arrive.
  */

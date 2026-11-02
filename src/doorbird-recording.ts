@@ -2,7 +2,7 @@
  *
  * doorbird-recording.ts: HomeKit Secure Video recording delegate for Doorbird.
  *
- * The flow follows the recording delegate in homebridge-unifi-protect (Copyright(C) 2017-2026, HJD, ISC license): when HomeKit asks for a recording,
+ * The flow follows the recording delegate in homebridge-unifi-protect (Copyright(C) 2017-2026, HJD, ISC license, see "Third-party code" in README.md): when HomeKit asks for a recording,
  * we hand the livestream buffer's fragments from the keyframe before the prebuffer start into an FFmpeg that transcodes them into the fragmented MP4
  * HomeKit requested, and yield its init segment and 4 s fragments, paced so HomeKit's 5 s timer never runs out.
  */

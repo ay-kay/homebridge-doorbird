@@ -212,3 +212,17 @@ Platform-level configuration parameters:
 * [homebridge-videodoorbell](https://github.com/Samfox2/homebridge-videodoorbell)
 * [homebridge-camera-ffmpeg](https://github.com/KhaosT/homebridge-camera-ffmpeg)
 * [hjdhjd](https://github.com/hjdhjd)
+
+## Third-party code
+The livestream buffer (`src/doorbird-livestream.ts`) and the HomeKit Secure Video recording delegate (`src/doorbird-recording.ts`) follow the
+timeshift buffer and recording delegate of [homebridge-unifi-protect](https://github.com/hjdhjd/homebridge-unifi-protect), and the plugin uses
+[homebridge-plugin-utils](https://github.com/hjdhjd/homebridge-plugin-utils) as a library. Both are Copyright (C) 2017-2026, HJD (https://github.com/hjdhjd)
+and licensed under the ISC license:
+
+> Permission to use, copy, modify, and/or distribute this software for any purpose with or without fee is hereby granted, provided that the above
+> copyright notice and this permission notice appear in all copies.
+>
+> THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+> MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+> WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN
+> CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
