@@ -62,6 +62,9 @@ The feature options for individual Doorbird devices can be customized using the 
 
 * <CODE>Relay.Hide.<I>relay</I></CODE> - hide the relay named *relay* from being shown in HomeKit.
 * <CODE>Audio.TwoWay.Disable</CODE> - disable two-way audio (the Talk button in the Home app) for this Doorbird.
+* <CODE>Video.Buffer.Disable</CODE> - stream the live view directly from the Doorbird instead of from the shared livestream buffer. This also disables [HomeKit Secure Video](#hksv), which records from the buffer.
+* <CODE>Video.HKSV.Disable</CODE> - do not offer [HomeKit Secure Video](#hksv) for this Doorbird.
+* <CODE>Motion.Ring.Disable</CODE> - do not report doorbell rings as motion. HomeKit Secure Video only records on motion, so rings are no longer recorded unless the Doorbird also detects motion.
 
 ### <A NAME="audio"></A>Audio
 The plugin streams the Doorbird's microphone to HomeKit as [Opus](https://opus-codec.org), at the sample rate the Home app asks for (24 or 16 kHz), the same way Home Assistant's HomeKit Bridge does. Earlier versions used AAC-ELD, which iOS played back distorted and with lagging video.
@@ -80,6 +83,18 @@ Requirements and caveats:
 * The Doorbird has a single speech channel. While someone is talking through HomeKit, nobody can talk through the Doorbird app (and vice versa). The channel is released `talkbackIdleSeconds` after you release the Talk button, and when you close the live view.
 * There is no echo cancellation. If the Home app plays the Doorbird's audio while you talk, you may hear yourself with a delay. Muting the live view audio or using headphones helps.
 * Audio from the Home app reaches the Doorbird with a small delay (FFmpeg startup and buffering), and the first fraction of a second of each talk burst may be lost.
+
+### <A NAME="hksv"></A>HomeKit Secure Video
+The plugin supports HomeKit Secure Video (HKSV): recordings of events in the Home app, stored in iCloud, with the object detection of your home hub. It is enabled by default and can be disabled per Doorbird with the `Video.HKSV.Disable` feature option. To turn on recording, open the camera's settings in the Home app and choose what to record under Recording Options.
+
+Requirements and caveats:
+
+* HomeKit Secure Video requires a home hub (an Apple TV or HomePod) and an iCloud+ plan that includes it.
+* Recordings come from the plugin's livestream buffer, so the buffer must not be disabled with `Video.Buffer.Disable`. The log tells you at startup whether HomeKit Secure Video is available.
+* The buffer keeps streaming from the Doorbird for as long as recording is enabled in the Home app, so HomeKit gets the seconds before an event too.
+* HomeKit only ever records on motion. Doorbell rings therefore also trip the motion sensor for a moment, so rings are recorded as well. The `Motion.Ring.Disable` feature option turns this off.
+* Video is transcoded with `libx264`, because HomeKit needs 4 second fragments that the Doorbird's own keyframe interval does not provide. This costs noticeable CPU while a recording runs (about a quarter of one core for 720p on a small virtual machine), so keep that in mind on low-end hardware.
+* Audio is recorded as AAC-LC, which requires an FFmpeg with `libfdk_aac` (the bundled [ffmpeg-for-homebridge](https://github.com/homebridge/ffmpeg-for-homebridge) is). Without it, recordings have no audio.
 
 ### Night vision
 Depending on your situation, you might benefit from having Doorbird's infrared light (aka night vision) turn on automatically for you.

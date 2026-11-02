@@ -12,8 +12,9 @@ import { ClientRequest } from "http";
 import { DoorbirdStation } from "./doorbird-station.js";
 import { DoorbirdTalkback } from "./doorbird-talkback.js";
 import { DOORBIRD_TALKBACK_IDLE_TIMEOUT, LIVESTREAM_MAX_START_BACKLOG, LIVESTREAM_READY_TIMEOUT, SNAPSHOT_RETRY_DELAY, STREAM_RETRIES, STREAM_RETRY_DELAY } from "./settings.js";
-import { BackpressureWriter, isKeyframe } from "homebridge-plugin-utils";
+import { BackpressureWriter, FfmpegOptions, isKeyframe } from "homebridge-plugin-utils";
 import { DoorbirdLivestream } from "./doorbird-livestream.js";
+import { DoorbirdRecordingDelegate } from "./doorbird-recording.js";
 import getPort from "get-port";
 // A precompiled ffmpeg binary that meets our requirements, if available.
 import pathToFfmpeg from "ffmpeg-for-homebridge";
@@ -24,6 +25,7 @@ import {
   AudioStreamingSamplerate,
   CameraController,
   CameraControllerOptions,
+  CameraRecordingOptions,
   CameraStreamingDelegate,
   HAP,
   Logging,
@@ -56,6 +58,12 @@ type SessionInfo = {
   audioSSRC: number;
 };
 
+// What the streaming delegate needs for HomeKit Secure Video. Both are null when the livestream buffer is disabled or FFmpeg could not be queried.
+export interface StreamingDelegateOptions {
+  ffmpegOptions: FfmpegOptions | null;
+  livestream: DoorbirdLivestream | null;
+}
+
 // Camera streaming delegate implementation for Doorbird.
 export class DoorbirdStreamingDelegate implements CameraStreamingDelegate {
   private readonly api: API;
@@ -70,6 +78,7 @@ export class DoorbirdStreamingDelegate implements CameraStreamingDelegate {
   readonly videoProcessor: string;
   private readonly interfaceName = "public";
   controller: CameraController;
+  public readonly recordingDelegate: DoorbirdRecordingDelegate | null = null;
 
   // Keep track of streaming sessions.
   pendingSessions: Record<string, SessionInfo> = {};
@@ -78,7 +87,7 @@ export class DoorbirdStreamingDelegate implements CameraStreamingDelegate {
   private launches: Record<string, { attempts: number, command: string, videoReturnPort: number }> = {};
   private bufferSessions: Record<string, { livestream: DoorbirdLivestream, onFragment: (data: Buffer) => void, onRestart: () => void, writer: BackpressureWriter }> = {};
 
-  constructor(doorbird: DoorbirdStation, twoWayAudio = false) {
+  constructor(doorbird: DoorbirdStation, twoWayAudio = false, streamingOptions: StreamingDelegateOptions = { ffmpegOptions: null, livestream: null }) {
     this.api = doorbird.api;
     this.doorbird = doorbird;
     this.debug = doorbird.debug.bind(doorbird.platform);
@@ -139,7 +148,74 @@ export class DoorbirdStreamingDelegate implements CameraStreamingDelegate {
         }
       }
     };
+
+    // HomeKit Secure Video records from the livestream buffer, so we need it and a working FFmpeg.
+    const { ffmpegOptions, livestream } = streamingOptions;
+
+    if(this.doorbird.options.includes("VIDEO.HKSV.DISABLE")) {
+      this.log.info("%s: HomeKit Secure Video disabled.", this.name);
+    } else if(!ffmpegOptions || !livestream) {
+      this.log.info("%s: HomeKit Secure Video disabled. It requires the livestream buffer.", this.name);
+    } else {
+      this.recordingDelegate = new DoorbirdRecordingDelegate({
+        accessory: doorbird.accessory,
+        audioSupport: ffmpegOptions.config.codecSupport.hasEncoder("aac", "libfdk_aac"),
+        debug: this.debug,
+        ffmpegOptions,
+        fps: 15,
+        hap: this.hap,
+        livestream,
+        log: this.log,
+        name: this.name,
+        verbose: this.platform.debugMode
+      });
+
+      const recordingOptions: CameraRecordingOptions = {
+        audio: {
+          codecs: [
+            {
+              audioChannels: 1,
+              bitrateMode: this.hap.AudioBitrate.VARIABLE,
+              samplerate: [this.hap.AudioRecordingSamplerate.KHZ_16],
+              type: this.hap.AudioRecordingCodecType.AAC_LC
+            }
+          ]
+        },
+        mediaContainerConfiguration: [
+          {
+            fragmentLength: 4000,
+            type: this.hap.MediaContainerType.FRAGMENTED_MP4
+          }
+        ],
+        overrideEventTriggerOptions: [this.hap.EventTriggerOption.MOTION, this.hap.EventTriggerOption.DOORBELL],
+        prebufferLength: 4000,
+        video: {
+          parameters: {
+            levels: [this.hap.H264Level.LEVEL3_1, this.hap.H264Level.LEVEL3_2, this.hap.H264Level.LEVEL4_0],
+            profiles: [this.hap.H264Profile.BASELINE, this.hap.H264Profile.MAIN, this.hap.H264Profile.HIGH]
+          },
+          resolutions: [
+            // Width, height, framerate.
+            [1280, 720, 15],
+            [640, 360, 15],
+            [320, 180, 15]
+          ],
+          type: this.hap.VideoCodecType.H264
+        }
+      };
+
+      // HomeKit records on motion, so the controller needs our motion sensor. The station creates it before the camera.
+      options.recording = { delegate: this.recordingDelegate, options: recordingOptions };
+      options.sensors = { motion: doorbird.accessory.getService(this.hap.Service.MotionSensor) ?? true };
+
+      this.log.info("%s: HomeKit Secure Video available.", this.name);
+    }
+
     this.controller = new this.hap.CameraController(options);
+
+    if(this.recordingDelegate) {
+      this.recordingDelegate.controller = this.controller;
+    }
   }
 
   // The FFmpeg binary we use: the user's choice, our bundled version from ffmpeg-for-homebridge, or whatever is in the path.

@@ -11,6 +11,7 @@ import { FfmpegProcess } from "./doorbird-ffmpeg.js";
 import { DoorbirdPlatform } from "./doorbird-platform.js";
 import { DoorbirdStreamingDelegate } from "./doorbird-stream.js";
 import { DoorbirdStationConfig } from "./doorbird-types.js";
+import { FfmpegOptions } from "homebridge-plugin-utils";
 import {
   API,
   APIEvent,
@@ -40,6 +41,7 @@ export class DoorbirdStation {
   dbApi!: DoorbirdApi;
   platform: DoorbirdPlatform;
   debug: (message: string, ...parameters: any[]) => void;
+  ffmpegOptions: FfmpegOptions | null = null;
   private hap: HAP;
   livestream: DoorbirdLivestream | null = null;
   private lockEventTimers: { [index: string]: NodeJS.Timeout };
@@ -163,7 +165,7 @@ export class DoorbirdStation {
 
     // Inform the API of our event handlers.
     this.dbApi.events.doorbell = this.doorbellEventHandler.bind(this);
-    this.dbApi.events.motionsensor = this.motionEventHandler.bind(this);
+    this.dbApi.events.motionsensor = (): void => this.motionEventHandler("motion");
 
     // Inform the user if we have any night vision triggers active.
     if(this.config.nightVisionDoorbell) {
@@ -441,12 +443,13 @@ export class DoorbirdStation {
     this.cameraUrl = this.dbApi.rtspUrl();
     this.snapshotUrl = this.config.snapshotUrl ? this.config.snapshotUrl : this.dbApi.snapshotUrl();
 
-    // Configure the video stream and inform HomeKit about it.
-    this.streamingDelegate = new DoorbirdStreamingDelegate(this, await this.twoWayAudioEnabled());
-    this.accessory.configureController(this.streamingDelegate.controller);
-
-    // Configure the livestream buffer that feeds the live view.
+    // Configure the livestream buffer that feeds the live view and HomeKit Secure Video. It needs the camera URL, and the streaming delegate needs it.
     await this.configureLivestream();
+
+    // Configure the video stream and inform HomeKit about it.
+    this.streamingDelegate = new DoorbirdStreamingDelegate(this, await this.twoWayAudioEnabled(),
+      { ffmpegOptions: this.ffmpegOptions, livestream: this.livestream });
+    this.accessory.configureController(this.streamingDelegate.controller);
 
     return true;
   }
@@ -459,7 +462,7 @@ export class DoorbirdStation {
       return false;
     }
 
-    const ffmpegOptions = await this.platform.ffmpegOptions(this.name);
+    const ffmpegOptions = this.ffmpegOptions = await this.platform.ffmpegOptions(this.name);
 
     if(!ffmpegOptions) {
       this.log.warn("%s: Unable to query FFmpeg, streaming directly from the Doorbird.", this.name);
@@ -549,8 +552,9 @@ export class DoorbirdStation {
     return true;
   }
 
-  // Motion event processing from Doorbird and delivered to HomeKit.
-  private motionEventHandler(): void {
+  // Motion event processing from Doorbird and delivered to HomeKit. A doorbell ring is also reported as motion, because HomeKit Secure Video only ever
+  // records on motion, never on the doorbell trigger.
+  private motionEventHandler(cause: "motion" | "ring" = "motion"): void {
 
     if(!this.accessory) {
       return;
@@ -571,7 +575,7 @@ export class DoorbirdStation {
     // Trigger the motion event.
     motionService.getCharacteristic(this.hap.Characteristic.MotionDetected).updateValue(true);
     this.motionEvent = true;
-    this.log("%s: Motion detected.", this.name);
+    this.log((cause === "ring") ? "%s: Doorbell ring reported as motion for HomeKit Secure Video." : "%s: Motion detected.", this.name);
 
     // Reset our motion event after DOORBIRD_MOTION_DURATION.
     const self = this;
@@ -581,8 +585,8 @@ export class DoorbirdStation {
       self.debug("%s: Resetting motion event.", this.name);
     }, 1000 * DOORBIRD_MOTION_DURATION);
 
-    // If configured, trigger a command line script.
-    if(this.config.cmdMotion) {
+    // If configured, trigger a command line script. A ring has its own script, so we only run this one for real motion.
+    if((cause === "motion") && this.config.cmdMotion) {
       this.log("%s: Executing doorbell command: %s.", this.name, this.config.cmdMotion);
       exec(this.config.cmdMotion, (error) => {
         if(error) {
@@ -617,6 +621,11 @@ export class DoorbirdStation {
       .setValue(this.hap.Characteristic.ProgrammableSwitchEvent.SINGLE_PRESS);
 
     this.log("%s: Doorbird detected a doorbell ring.", this.name);
+
+    // Trip the motion sensor as well, so HomeKit Secure Video records the ring.
+    if(!this.options.includes("MOTION.RING.DISABLE")) {
+      this.motionEventHandler("ring");
+    }
 
     // If configured, trigger a command line script.
     if(this.config.cmdDoorbell) {

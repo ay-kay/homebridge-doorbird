@@ -80,7 +80,7 @@ DoorBird, without breaking the live view, two-way audio and the relay lock that 
 
 ### 3.4 Recording (HKSV)
 
-- Advertised: `prebufferLength` 10000, `fragmentLength` 4000, H.264 Main (levels 3.1, 3.2, 4.0), resolutions 1280x720,
+- Advertised: `prebufferLength` 4000, `fragmentLength` 4000, H.264 Baseline/Main/High (levels 3.1, 3.2, 4.0), resolutions 1280x720,
   640x360, 320x180 at 15 fps, audio AAC-LC at 16 kHz (the source is 8 kHz; HomeKit picks from what we offer).
 - Video is transcoded with libx264 (`veryfast`, `fps=<selected>`, GOP 4 s, bitrate as requested by HomeKit) because
   the DoorBird's own keyframe cadence (1.2 to 3 s) does not give 4 s fragments. Measured on the VM: 720p at 15 fps costs
