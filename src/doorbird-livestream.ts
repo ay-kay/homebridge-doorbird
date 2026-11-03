@@ -21,6 +21,7 @@ import { FfmpegOptions, LivestreamProcess, LivestreamProcessFactory, isKeyframe,
 import { DoorbirdAudioRelay } from "./doorbird-audio-relay.js";
 import { EventEmitter } from "events";
 import { Logging } from "homebridge";
+import { redactUrl } from "./doorbird-util.js";
 
 export type SegmentRole = "blob" | "live";
 
@@ -187,7 +188,7 @@ export class DoorbirdLivestream extends EventEmitter<LivestreamEvents> {
     try {
       await this.audioRelay.start();
     } catch(error) {
-      this.log.error("%s: Unable to start the audio relay: %s", this.name, error instanceof Error ? error.message : error);
+      this.log.error("%s: Unable to start the audio relay: %s", this.name, redactUrl(error instanceof Error ? error.message : String(error)));
     }
 
     if(!this.running || (generation !== this.generation)) {
@@ -221,7 +222,7 @@ export class DoorbirdLivestream extends EventEmitter<LivestreamEvents> {
       }
     } catch(error) {
       if(this.running && (generation === this.generation)) {
-        this.debug("%s: Livestream buffer iteration ended: %s", this.name, error instanceof Error ? error.message : error);
+        this.debug("%s: Livestream buffer iteration ended: %s", this.name, redactUrl(error instanceof Error ? error.message : String(error)));
       }
     } finally {
       if(this.running && (generation === this.generation)) {
@@ -243,7 +244,8 @@ export class DoorbirdLivestream extends EventEmitter<LivestreamEvents> {
 
     if(this.failures === LIVESTREAM_FAILURE_LOG_THRESHOLD) {
       this.log.warn("%s: The livestream buffer cannot start, retrying. Last FFmpeg output:", this.name);
-      ("stderrLog" in process ? (process as { stderrLog: string[] }).stderrLog : []).slice(-5).forEach((line) => this.log.warn("%s: ffmpeg: %s", this.name, line));
+      ("stderrLog" in process ? (process as { stderrLog: string[] }).stderrLog : []).slice(-5)
+        .forEach((line) => this.log.warn("%s: ffmpeg: %s", this.name, redactUrl(line)));
     } else if(produced) {
       this.debug("%s: Livestream buffer ended, restarting.", this.name);
     }

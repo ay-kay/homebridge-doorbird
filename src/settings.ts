@@ -23,8 +23,10 @@ export const DOORBIRD_MOTION_DURATION = 30;
 // Doorbird night vision infrared light duration, in seconds. This is set by the Doorbird itself and is not user configurable.
 export const DOORBIRD_NIGHTVISION_DURATION = 180;
 
-// Doorbird takes about 2 minutes to reboot.
-export const DOORBIRD_REBOOT_DURATION = 120;
+// Doorbird events API: when we cannot connect or lose the connection, we retry after this long, doubling the pause after each failure up to the
+// maximum. Times in milliseconds.
+export const DOORBIRD_EVENTS_RETRY_DELAY = 5000;
+export const DOORBIRD_EVENTS_RETRY_DELAY_MAX = 120000;
 
 // Two-way audio: stop talking to the Doorbird after this many seconds without audio from HomeKit. HomeKit only sends audio while the Talk button is pressed,
 // and the Doorbird has a single speech channel that we must release as soon as possible.

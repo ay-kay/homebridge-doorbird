@@ -128,6 +128,16 @@ DoorBird, without breaking the live view, two-way audio and the relay lock that 
   port 8557 while port 80 kept delivering audio). FFmpeg produced audio-only fragments forever, live views waited for a keyframe that never came,
   and every HKSV recording ended after 0 seconds. The buffer now passes `-timeout` to the RTSP input and restarts FFmpeg when no keyframe
   arrives for `LIVESTREAM_VIDEO_STALL_TIMEOUT`.
+- The events API (monitor.cgi) used to give up silently: a refused connection (HTTP 401 for a user without rights, 503 while the Doorbird
+  reboots) or a Doorbird that was not reachable at Homebridge start left rings and motion dead until a restart, with nothing in the log. It now
+  warns with the cause and retries with exponential backoff (`DOORBIRD_EVENTS_RETRY_DELAY` up to `DOORBIRD_EVENTS_RETRY_DELAY_MAX`). An ended
+  or failed response body and a missed heartbeat reconnect through the same path, exactly once per lost connection, and repeats of the same
+  failure go to the debug log only.
+- Most early HKSV ends on a healthy installation come from HomeKit itself: the hub closes the stream as slow to respond or cancelled and
+  re-requests right away. The repeated-end hint therefore only blames the Doorbird's video when the end came from our side (FFmpeg exited or
+  timed out, or no fragment was delivered); otherwise it points at the home hub's network connection.
+- Error messages from node-fetch and FFmpeg command lines and output contain the stream URLs with the Doorbird credentials; everything that can
+  reach the log goes through `redactUrl()`, which masks them as `scheme://<redacted>@`.
 
 ## 6. Open risks
 

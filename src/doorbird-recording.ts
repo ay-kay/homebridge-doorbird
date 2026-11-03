@@ -11,6 +11,7 @@ import { CameraController, CameraRecordingConfiguration, CameraRecordingDelegate
   from "homebridge";
 import { DoorbirdLivestream, SegmentRole } from "./doorbird-livestream.js";
 import { RECORDING_EARLY_END_WARNING, RECORDING_VIDEO_AGE_WARNING } from "./settings.js";
+import { redactUrl } from "./doorbird-util.js";
 
 // A single zero byte with isLast tells HomeKit there is nothing to record.
 const END_OF_STREAM = Buffer.alloc(1, 0);
@@ -44,7 +45,7 @@ export class DoorbirdRecordingDelegate implements CameraRecordingDelegate {
   private process?: FfmpegRecordingProcess;
   private recordingActive = false;
   private segmentListener?: (data: Buffer, role: SegmentRole) => void;
-  private session = { declined: false, id: 0, segmentsIn: 0, segmentsOut: 0, started: 0 };
+  private session = { declined: false, endedByUs: false, id: 0, segmentsIn: 0, segmentsOut: 0, started: 0 };
   private earlyEnds = 0;
   private transmitting = false;
   private readonly verbose: boolean;
@@ -97,7 +98,7 @@ export class DoorbirdRecordingDelegate implements CameraRecordingDelegate {
 
   // A recording event: HomeKit saw motion and wants video from prebufferLength ago until it closes the stream.
   public async *handleRecordingStreamRequest(streamId: number, signal?: AbortSignal): AsyncGenerator<RecordingPacket> {
-    this.session = { declined: false, id: ++this.eventId, segmentsIn: 0, segmentsOut: 0, started: Date.now() };
+    this.session = { declined: false, endedByUs: false, id: ++this.eventId, segmentsIn: 0, segmentsOut: 0, started: Date.now() };
 
     let lastYield = this.session.started;
 
@@ -192,6 +193,12 @@ export class DoorbirdRecordingDelegate implements CameraRecordingDelegate {
     } finally {
       this.livestream.off("discontinuity", onDiscontinuity);
       this.livestream.off("terminated", onTerminated);
+
+      // HomeKit aborts the signal before it tells us why it closed the stream. A stream that ends without that came to an end on our side: FFmpeg
+      // exited or the buffer went away.
+      if(!signal?.aborted) {
+        this.session.endedByUs = true;
+      }
     }
 
     if(terminated || this.process?.isTimedOut) {
@@ -302,24 +309,32 @@ export class DoorbirdRecordingDelegate implements CameraRecordingDelegate {
     this.earlyEnds++;
 
     const descriptions: Record<number, string> = {
+      [this.hap.HDSProtocolSpecificErrorReason.BUSY]: "the home hub was busy.",
       [this.hap.HDSProtocolSpecificErrorReason.CANCELLED]: "HomeKit cancelled the request.",
       [this.hap.HDSProtocolSpecificErrorReason.TIMEOUT]: "the request timed out.",
       [this.hap.HDSProtocolSpecificErrorReason.UNEXPECTED_FAILURE]: "the request was slow to respond."
     };
 
+    // HomeKit ended the session itself when it closed with one of these reasons while we were still delivering fragments. It usually re-requests right
+    // away, and the Doorbird's video is not to blame. We failed to deliver when FFmpeg exited or timed out, or when not a single fragment went out.
+    const homeKitReasons: number[] = [ this.hap.HDSProtocolSpecificErrorReason.BUSY, this.hap.HDSProtocolSpecificErrorReason.CANCELLED,
+      this.hap.HDSProtocolSpecificErrorReason.TIMEOUT, this.hap.HDSProtocolSpecificErrorReason.UNEXPECTED_FAILURE ];
+    const endedByHomeKit = homeKitReasons.includes(reason) && !this.session.endedByUs && !timedOut && (this.session.segmentsOut > 0);
+
     // An occasional early end is normal. A run of them means HomeKit is not getting video, usually because the buffer has none: say so instead of
-    // repeating that it can be ignored.
+    // repeating that it can be ignored. A run of ends that HomeKit initiated points at the home hub instead.
     const videoAge = this.livestream.videoAge;
     const hint = (videoAge > RECORDING_VIDEO_AGE_WARNING) ?
       " The buffer has had no video from the Doorbird for " + (Number.isFinite(videoAge) ? Math.round(videoAge / 1000).toString() + " seconds." : "a while.") :
-      (this.earlyEnds >= RECORDING_EARLY_END_WARNING) ? " That is " + this.earlyEnds.toString() + " early ends in a row, check the Doorbird's video." :
-        " This happens occasionally and can be ignored.";
+      (this.earlyEnds < RECORDING_EARLY_END_WARNING) ? " This happens occasionally and can be ignored." :
+        endedByHomeKit ? " That is " + this.earlyEnds.toString() + " early ends in a row from HomeKit. If it keeps happening, check the home hub's network connection." :
+          " That is " + this.earlyEnds.toString() + " early ends in a row, check the Doorbird's video.";
 
     this.log.warn("%s: HKSV recording event ended early after %s seconds: %s%s", this.name, Math.round(seconds),
       descriptions[reason] ?? ("reason " + reason.toString() + "."), hint);
 
     if(timedOut || this.verbose) {
-      stderr.slice(-5).forEach((line) => this.log.warn("%s: ffmpeg: %s", this.name, line));
+      stderr.slice(-5).forEach((line) => this.log.warn("%s: ffmpeg: %s", this.name, redactUrl(line)));
     }
   }
 

@@ -2,12 +2,19 @@
  *
  * doorbird-api.ts: Our Doorbird API implementation.
  */
-import { DOORBIRD_API_RESPONSE_TIME, DOORBIRD_HEARTBEAT_INTERVAL, DOORBIRD_REBOOT_DURATION } from "./settings.js";
+import { DOORBIRD_API_RESPONSE_TIME, DOORBIRD_EVENTS_RETRY_DELAY, DOORBIRD_EVENTS_RETRY_DELAY_MAX, DOORBIRD_HEARTBEAT_INTERVAL } from "./settings.js";
 import { DoorbirdDeviceDetail, DoorbirdDeviceInformation } from "./doorbird-types.js";
 import fetch, { FetchError, RequestInfo, RequestInit, Response } from "node-fetch";
 import { DoorbirdPlatform } from "./doorbird-platform.js";
 import { Logging } from "homebridge";
 import http from "http";
+import { redactUrl } from "./doorbird-util.js";
+
+// Tests shorten the events API retry delays. Times in milliseconds.
+export interface DoorbirdApiOptions {
+  eventRetryDelay?: number;
+  eventRetryDelayMax?: number;
+}
 
 /*
  * The Doorbird API is well documented and supported. You can read about it at:
@@ -17,7 +24,12 @@ import http from "http";
 export class DoorbirdApi {
   private debug: (message: string, ...parameters: unknown[]) => void;
   private doorbirdAddress: string;
-  private eventHeartbeatTimer!: NodeJS.Timeout;
+  private eventController?: AbortController;
+  private eventFailure: string | null = null;
+  private eventRetryDelay: number;
+  private readonly eventRetryDelayMax: number;
+  private readonly eventRetryDelayMin: number;
+  private eventRetryTimer?: NodeJS.Timeout;
   events: { [index: string]: () => void };
   eventListenerConfigured = false;
   private log: Logging;
@@ -30,9 +42,12 @@ export class DoorbirdApi {
   private username: string;
 
   // Initialize this instance with our login information.
-  constructor(platform: DoorbirdPlatform, doorbirdName: string, doorbirdAddress: string, username: string, password: string) {
+  constructor(platform: DoorbirdPlatform, doorbirdName: string, doorbirdAddress: string, username: string, password: string, options: DoorbirdApiOptions = {}) {
     this.debug = platform.debug.bind(platform);
     this.deviceType = null;
+    this.eventRetryDelayMin = options.eventRetryDelay ?? DOORBIRD_EVENTS_RETRY_DELAY;
+    this.eventRetryDelayMax = options.eventRetryDelayMax ?? DOORBIRD_EVENTS_RETRY_DELAY_MAX;
+    this.eventRetryDelay = this.eventRetryDelayMin;
     this.events = {};
     this.doorbirdAddress = doorbirdAddress;
     this.firmware = null;
@@ -78,7 +93,7 @@ export class DoorbirdApi {
     this.relays = birdInfo.RELAYS;
 
     // Launch the Doorbird events API monitor.
-    void this.launchEventMonitor();
+    this.launchEventMonitor();
 
     // We're all set.
     return true;
@@ -110,13 +125,36 @@ export class DoorbirdApi {
     return true;
   }
 
-  // Monitor events generated on the Doorbird.
-  private async launchEventMonitor(): Promise<void> {
+  // Monitor events generated on the Doorbird. We keep exactly one connection to the events API: while one is being opened, is open, or a reconnect is
+  // scheduled, further calls do nothing.
+  public launchEventMonitor(): void {
+    if(this.eventController || this.eventRetryTimer) {
+      return;
+    }
+
+    const controller = new AbortController();
+
+    this.eventController = controller;
+    void this.openEventMonitor(controller);
+  }
+
+  // Stop monitoring events: close the connection and cancel a scheduled reconnect.
+  public stopEventMonitor(): void {
+    clearTimeout(this.eventRetryTimer);
+    this.eventRetryTimer = undefined;
+
+    const controller = this.eventController;
+
+    this.eventController = undefined;
+    controller?.abort();
+  }
+
+  // Open the connection to the events API and process the events it delivers.
+  private async openEventMonitor(controller: AbortController): Promise<void> {
     const url = this.authUrl() + "/bha-api/monitor.cgi?ring=doorbell,motionsensor";
 
     // Make sure we maintain a heartbeat and recover in case the API connection dies.
     const httpAgent = new http.Agent({ timeout: 1000 * DOORBIRD_HEARTBEAT_INTERVAL });
-    const controller = new AbortController();
 
     // Open our connection to the Doorbird monitor API.
     let response;
@@ -124,15 +162,13 @@ export class DoorbirdApi {
     try {
       response = await fetch(url, { agent: httpAgent, method: "GET", signal: controller.signal });
     } catch(error) {
-      if(error instanceof Error) {
-        this.log("Error: %s, Message: %s", error.name, error.message);
-      } else {
-        this.log("An unknown error has occured: %s", error);
-      }
+      this.eventMonitorFailed(controller, redactUrl((error instanceof Error) ? error.message : String(error)));
+      return;
     }
 
-    // Our connection failed for some reason. Quietly go away.
-    if(!response || !response.ok) {
+    // The Doorbird refused us, e.g. because the user lacks the rights for the events API or the Doorbird is still booting.
+    if(!response.ok) {
+      this.eventMonitorFailed(controller, "HTTP " + response.status.toString(), response.status);
       return;
     }
 
@@ -144,37 +180,43 @@ export class DoorbirdApi {
     const foundContentBoundary = findContentBoundary.exec(contentHeader);
 
     if(!foundContentBoundary) {
-      this.log("%s: Unable to parse content-type header: %s.", this.getName(), contentHeader);
+      this.eventMonitorFailed(controller, "unable to parse the content-type header: " + contentHeader);
       return;
     }
 
     // Save the content boundary to delimit event responses.
     const contentBoundary = foundContentBoundary[0];
 
+    // We are connected: the next failure starts the backoff from the beginning again.
+    this.eventFailure = null;
+    this.eventRetryDelay = this.eventRetryDelayMin;
     this.log("%s: Connected to the Doorbird events API.", this.getName());
 
-    let monitorTimeout: NodeJS.Timeout;
+    let monitorTimeout: NodeJS.Timeout | undefined;
+
+    // The connection is gone. Whichever of heartbeat, end, or error notices first reconnects, the others find the controller replaced and do nothing.
+    const connectionLost = (cause: string): void => {
+      clearTimeout(monitorTimeout);
+      this.eventMonitorFailed(controller, cause, undefined, true);
+    };
+
+    // The events API heartbeats every 20 seconds or so. We reset and retry if we ever exceed that, starting right after the connect so that a
+    // connection that never delivers anything does not hang around forever.
+    const armHeartbeat = (): void => {
+      clearTimeout(monitorTimeout);
+      monitorTimeout = setTimeout(() => connectionLost("no heartbeat for " + DOORBIRD_HEARTBEAT_INTERVAL.toString() + " seconds"),
+        1000 * DOORBIRD_HEARTBEAT_INTERVAL);
+    };
+
+    response.body.on("end", () => connectionLost("the Doorbird closed the connection"));
+    response.body.on("error", (error: Error) => connectionLost(redactUrl(error.message)));
+    armHeartbeat();
 
     // Now that we have a long-lived connection to the monitor API, we can process events generated by the Doorbird.
     response.body.on("data", (data: Buffer) => {
       const birdEvents = data.toString().split("\r\n");
 
-      // The events API heartbeats every 20 seconds or so. We want to reset and retry if we ever exceed that.
-      clearTimeout(monitorTimeout);
-
-      // We missed a heartbeat.
-      monitorTimeout = setTimeout(() => {
-        this.log("%s: Connection to Doorbird events API has been lost. Reconnection attempt in %s minutes.",
-          this.getName(), DOORBIRD_REBOOT_DURATION / 60);
-
-        // Kill the previous connection, if it's still around.
-        controller.abort();
-
-        // Wait for the reboot to complete before retrying so we don't spam the Doorbird.
-        setTimeout(() => {
-          void this.launchEventMonitor();
-        }, 1000 * DOORBIRD_REBOOT_DURATION );
-      }, 1000 * DOORBIRD_HEARTBEAT_INTERVAL);
+      armHeartbeat();
 
       // Iterate through the data chunk we've just received.
       for(const birdEventEntry of birdEvents) {
@@ -221,6 +263,44 @@ export class DoorbirdApi {
         }
       }
     });
+  }
+
+  // The events API connection failed or was lost: tell the user and retry with exponential backoff. We warn on the first failure and whenever the
+  // cause changes, and log repeats of the same failure only in debug mode.
+  private eventMonitorFailed(controller: AbortController, cause: string, status?: number, lost = false): void {
+
+    // This connection has already been handled.
+    if(this.eventController !== controller) {
+      return;
+    }
+
+    // Kill the connection, if it's still around.
+    this.eventController = undefined;
+    controller.abort();
+
+    const delay = this.eventRetryDelay;
+    const seconds = delay / 1000;
+
+    this.eventRetryDelay = Math.min(delay * 2, this.eventRetryDelayMax);
+
+    const logLevel = (cause === this.eventFailure) ? this.debug : this.log.warn.bind(this.log);
+
+    this.eventFailure = cause;
+
+    if(lost) {
+      logLevel("%s: Connection to the Doorbird events API has been lost: %s. Reconnecting in %s seconds.", this.getName(), cause, seconds);
+    } else if((status === 401) || (status === 403)) {
+      logLevel("%s: Unable to connect to the Doorbird events API (HTTP %s). Check the user's permissions in the Doorbird app.", this.getName(), status);
+    } else if(status !== undefined) {
+      logLevel("%s: Unable to connect to the Doorbird events API (HTTP %s), retrying in %s seconds.", this.getName(), status, seconds);
+    } else {
+      logLevel("%s: Unable to connect to the Doorbird events API: %s. Retrying in %s seconds.", this.getName(), cause, seconds);
+    }
+
+    this.eventRetryTimer = setTimeout(() => {
+      this.eventRetryTimer = undefined;
+      this.launchEventMonitor();
+    }, delay);
   }
 
   // Utility to generate a nicely formatted NVR string.
@@ -392,7 +472,7 @@ export class DoorbirdApi {
               this.log("%s: Doorbird API connection was terminated because it was taking too long.", this.getName());
             } else if(logErrors) {
               this.log("ERROR CODE: %s", error.code);
-              this.log(error.message);
+              this.log(redactUrl(error.message));
             }
         }
       }

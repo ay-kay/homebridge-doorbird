@@ -30,6 +30,7 @@ import {
   PLATFORM_NAME,
   PLUGIN_NAME
 } from "./settings.js";
+import { redactUrl } from "./doorbird-util.js";
 
 export class DoorbirdStation {
   accessory!: PlatformAccessory;
@@ -89,8 +90,9 @@ export class DoorbirdStation {
 
     // Initialize our connection to the Doorbird API and instantiate our accessory.
     this.dbApi = new DoorbirdApi(platform, this.name, doorbirdConfig.ip, doorbirdConfig.username, doorbirdConfig.password);
+    this.api.on(APIEvent.SHUTDOWN, () => this.dbApi.stopEventMonitor());
     this.configureDoorbird().catch((error: unknown) => {
-      this.log.error("%s: Error configuring the Doorbird: %s", this.name, error instanceof Error ? error.message : error);
+      this.log.error("%s: Error configuring the Doorbird: %s", this.name, redactUrl(error instanceof Error ? error.message : String(error)));
     });
   }
 
@@ -495,7 +497,7 @@ export class DoorbirdStation {
     try {
       audioSupport = await FfmpegProcess.codecEnabled(DoorbirdStreamingDelegate.videoProcessor(this.platform), "libopus");
     } catch(error) {
-      this.debug("%s: Unable to query FFmpeg for its codecs: %s", this.name, error instanceof Error ? error.message : error);
+      this.debug("%s: Unable to query FFmpeg for its codecs: %s", this.name, redactUrl(error instanceof Error ? error.message : String(error)));
     }
 
     if(!audioSupport) {
@@ -587,10 +589,10 @@ export class DoorbirdStation {
 
     // If configured, trigger a command line script. A ring has its own script, so we only run this one for real motion.
     if((cause === "motion") && this.config.cmdMotion) {
-      this.log("%s: Executing doorbell command: %s.", this.name, this.config.cmdMotion);
+      this.log("%s: Executing motion command: %s.", this.name, redactUrl(this.config.cmdMotion));
       exec(this.config.cmdMotion, (error) => {
         if(error) {
-          this.log(this.name + ": Error executing motion command: " + error);
+          this.log("%s: Error executing motion command: %s", this.name, redactUrl(String(error)));
         }
       });
     }
@@ -629,10 +631,10 @@ export class DoorbirdStation {
 
     // If configured, trigger a command line script.
     if(this.config.cmdDoorbell) {
-      this.log("%s: Executing doorbell command: %s.", this.name, this.config.cmdDoorbell);
+      this.log("%s: Executing doorbell command: %s.", this.name, redactUrl(this.config.cmdDoorbell));
       exec(this.config.cmdDoorbell, (error) => {
         if(error) {
-          this.log(this.name + ": Error executing doorbell command: " + error);
+          this.log("%s: Error executing doorbell command: %s", this.name, redactUrl(String(error)));
         }
       });
     }

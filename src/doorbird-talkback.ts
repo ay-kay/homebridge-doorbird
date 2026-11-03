@@ -15,6 +15,7 @@
 import { ChildProcess, spawn } from "child_process";
 import { ClientRequest, IncomingMessage } from "http";
 import { Socket, createSocket } from "dgram";
+import { redactUrl } from "./doorbird-util.js";
 
 // Parameters for the SDP description we hand to the talkback FFmpeg.
 export interface TalkbackSdpOptions {
@@ -111,7 +112,7 @@ export class DoorbirdTalkback {
     // Packets go to FFmpeg on loopback.
     this.forwardSocket = createSocket("udp4");
     this.forwardSocket.on("error", (error: Error) => {
-      this.options.debug("%s: Two-way audio forwarding error: %s.", this.options.name, error.message);
+      this.options.debug("%s: Two-way audio forwarding error: %s.", this.options.name, redactUrl(error.message));
     });
   }
 
@@ -212,12 +213,12 @@ export class DoorbirdTalkback {
 
     ffmpeg.stdin?.on("error", (error: Error) => {
       if(!error.message.includes("EPIPE")) {
-        this.options.debug("%s: Two-way audio ffmpeg stdin error: %s.", this.options.name, error.message);
+        this.options.debug("%s: Two-way audio ffmpeg stdin error: %s.", this.options.name, redactUrl(error.message));
       }
     });
 
     ffmpeg.stdout?.on("error", (error: Error) => {
-      this.options.debug("%s: Two-way audio ffmpeg stdout error: %s.", this.options.name, error.message);
+      this.options.debug("%s: Two-way audio ffmpeg stdout error: %s.", this.options.name, redactUrl(error.message));
     });
 
     // Hand FFmpeg the session description.
@@ -267,7 +268,7 @@ export class DoorbirdTalkback {
       return;
     }
 
-    this.options.log.error("%s: Two-way audio error: %s", this.options.name, reason);
+    this.options.log.error("%s: Two-way audio error: %s", this.options.name, redactUrl(reason));
     this.failed = true;
     this.stopTalking();
   }

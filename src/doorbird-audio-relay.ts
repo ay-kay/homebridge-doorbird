@@ -11,6 +11,7 @@ import { AUDIO_RELAY_GAP_TOLERANCE, AUDIO_RELAY_MAX_QUEUE, AUDIO_RELAY_PRIME, AU
 import { ClientRequest, IncomingMessage } from "http";
 import { Server, Socket, createServer } from "net";
 import { Logging } from "homebridge";
+import { redactUrl } from "./doorbird-util.js";
 
 // G.711 µ-law at 8 kHz: one byte per sample.
 const BYTES_PER_SECOND = 8000;
@@ -146,7 +147,7 @@ export class DoorbirdAudioRelay {
           return;
         }
 
-        this.debug("%s: Audio stream error: %s", this.name, error.message);
+        this.debug("%s: Audio stream error: %s", this.name, redactUrl(error.message));
         this.scheduleReconnect(true);
       });
     });
@@ -156,7 +157,7 @@ export class DoorbirdAudioRelay {
         return;
       }
 
-      this.debug("%s: Unable to connect to the Doorbird audio stream: %s", this.name, error.message);
+      this.debug("%s: Unable to connect to the Doorbird audio stream: %s", this.name, redactUrl(error.message));
       this.scheduleReconnect(true);
     });
 

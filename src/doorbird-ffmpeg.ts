@@ -12,6 +12,7 @@ import execa from "execa";
 import { Logging, StreamRequestCallback } from "homebridge";
 import { DoorbirdStreamingDelegate } from "./doorbird-stream.js";
 import { FFMPEG_STDERR_TAIL } from "./settings.js";
+import { redactUrl } from "./doorbird-util.js";
 
 export class FfmpegProcess {
   private readonly debug: (message: string, ...parameters: any[]) => void;
@@ -31,7 +32,7 @@ export class FfmpegProcess {
     let started = false;
 
     // Never log the Doorbird credentials embedded in the stream URLs.
-    this.debug("%s: ffmpeg command: %s %s", delegate.name, delegate.videoProcessor, command.replace(/(\w+:\/\/)[^@\s]+@/g, "$1<redacted>@"));
+    this.debug("%s: ffmpeg command: %s %s", delegate.name, delegate.videoProcessor, redactUrl(command));
 
     const socket = createSocket("udp4");
 
@@ -64,7 +65,7 @@ export class FfmpegProcess {
     if(this.process.stdin) {
       this.process.stdin.on("error", (error: Error) => {
         if(!error.message.includes("EPIPE")) {
-          this.log.error("%s: FFmpeg error: %s", delegate.name, error.message);
+          this.log.error("%s: FFmpeg error: %s", delegate.name, redactUrl(error.message));
         }
       });
     }
@@ -82,7 +83,7 @@ export class FfmpegProcess {
         }
 
         // Keep the last few lines so we can explain an unexpected exit even without debug logging.
-        data.toString().split(/\n/).forEach((line: string) => {
+        redactUrl((data as Buffer).toString()).split(/\n/).forEach((line: string) => {
           if(line.trim().length) {
             this.stderrTail = this.stderrTail.concat(line.trim()).slice(-FFMPEG_STDERR_TAIL);
           }
@@ -97,7 +98,7 @@ export class FfmpegProcess {
 
     // Error handling.
     this.process.on("error", (error: Error) => {
-      this.log.error("%s: Unable to start stream: %s.", delegate.name, error.message);
+      this.log.error("%s: Unable to start stream: %s.", delegate.name, redactUrl(error.message));
       if(callback) {
         callback(new Error("ffmpeg process creation failed!"));
         delegate.stopStream(sessionId);

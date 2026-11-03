@@ -40,6 +40,7 @@ import {
   StreamRequestCallback,
   StreamRequestTypes
 } from "homebridge";
+import { redactUrl } from "./doorbird-util.js";
 
 
 type SessionInfo = {
@@ -225,7 +226,8 @@ export class DoorbirdStreamingDelegate implements CameraStreamingDelegate {
 
   // HomeKit image snapshot request handler.
   async handleSnapshotRequest(request: SnapshotRequest, callback: SnapshotRequestCallback): Promise<void> {
-    this.debug("%s: HomeKit snapshot request: %sx%s. Retrieving image from Doorbird: %s", this.name, request.width, request.height, this.doorbird.snapshotUrl);
+    this.debug("%s: HomeKit snapshot request: %sx%s. Retrieving image from Doorbird: %s", this.name, request.width, request.height,
+      redactUrl(this.doorbird.snapshotUrl));
 
     // Should we use night vision?
     if(this.doorbird.config.nightVisionSnapshot || (this.doorbird.config.nightVisionSnapshotNight && this.platform.isNight())) {
@@ -250,8 +252,11 @@ export class DoorbirdStreamingDelegate implements CameraStreamingDelegate {
       const buffer = await response.buffer();
       callback(undefined, buffer);
     } catch(error) {
-      this.log.error("%s: An error occurred while making a snapshot request: %s.", this.name, error);
-      callback(error instanceof Error ? error : new Error(String(error)));
+      // The error text from node-fetch contains the snapshot URL with the credentials. HAP may log what we hand back, so mask it there as well.
+      const message = redactUrl((error instanceof Error) ? error.message : String(error));
+
+      this.log.error("%s: An error occurred while making a snapshot request: %s.", this.name, message);
+      callback(new Error(message));
     }
   }
 
@@ -511,7 +516,7 @@ export class DoorbirdStreamingDelegate implements CameraStreamingDelegate {
       });
     } catch(error) {
       talkback?.close();
-      this.log.error("%s: Audio is unavailable for this session: %s", this.name, error instanceof Error ? error.message : error);
+      this.log.error("%s: Audio is unavailable for this session: %s", this.name, redactUrl(error instanceof Error ? error.message : String(error)));
       return null;
     }
   }
@@ -523,8 +528,10 @@ export class DoorbirdStreamingDelegate implements CameraStreamingDelegate {
       case StreamRequestTypes.START:
         // Node 22 terminates the process on unhandled promise rejections, so make sure a failure here (e.g. FFmpeg not found) is handled.
         this.startStream(request, callback).catch((error: unknown) => {
-          this.log.error("%s: Unable to start the video stream: %s", this.name, error instanceof Error ? error.message : error);
-          callback(error instanceof Error ? error : new Error(String(error)));
+          const message = redactUrl((error instanceof Error) ? error.message : String(error));
+
+          this.log.error("%s: Unable to start the video stream: %s", this.name, message);
+          callback(new Error(message));
         });
         break;
 
@@ -598,7 +605,7 @@ export class DoorbirdStreamingDelegate implements CameraStreamingDelegate {
       delete this.ongoingSessions[sessionId];
       this.log.info("%s: Stopped video stream.", this.name);
     } catch(error) {
-      this.log.error("%s: Error occurred terminating video process: %s", this.name, error);
+      this.log.error("%s: Error occurred terminating video process: %s", this.name, redactUrl(String(error)));
     } finally {
       this.needNightVision = false;
     }

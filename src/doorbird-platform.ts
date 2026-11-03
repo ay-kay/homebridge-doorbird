@@ -9,6 +9,7 @@ import { API, APIEvent, DynamicPlatformPlugin, Logging, PlatformAccessory, Platf
 import { FfmpegCodecs, FfmpegOptions, HomebridgePluginLogging } from "homebridge-plugin-utils";
 import { DOORBIRD_FFMPEG_OPTIONS } from "./settings.js";
 import { DoorbirdStreamingDelegate } from "./doorbird-stream.js";
+import { redactUrl } from "./doorbird-util.js";
 import util from "util";
 
 export class DoorbirdPlatform implements DynamicPlatformPlugin {
@@ -98,7 +99,7 @@ export class DoorbirdPlatform implements DynamicPlatformPlugin {
     const log = this.pluginLogger();
 
     this.ffmpegCodecs ??= FfmpegCodecs.probe({ ffmpegExec: DoorbirdStreamingDelegate.videoProcessor(this), log }).catch((error: unknown) => {
-      this.log.error("Unable to probe FFmpeg: %s", error instanceof Error ? error.message : error);
+      this.log.error("Unable to probe FFmpeg: %s", redactUrl(error instanceof Error ? error.message : String(error)));
       return null;
     });
 
@@ -113,9 +114,8 @@ export class DoorbirdPlatform implements DynamicPlatformPlugin {
 
   // A logger for homebridge-plugin-utils that never prints Doorbird credentials: its FFmpeg command lines contain the RTSP URL.
   private pluginLogger(): HomebridgePluginLogging {
-    const redact = (message: string): string => message.replace(/(\w+:\/\/)[^@\s/]+@/g, "$1<redacted>@");
     const wrap = (level: "debug" | "error" | "info" | "warn") => (message: string, ...parameters: unknown[]): void => {
-      const text = redact(util.format(message, ...parameters));
+      const text = redactUrl(util.format(message, ...parameters));
 
       if(level === "debug") {
         this.debug(text);
