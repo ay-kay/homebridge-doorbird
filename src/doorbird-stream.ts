@@ -11,7 +11,9 @@ import { DoorbirdPlatform } from "./doorbird-platform.js";
 import { ClientRequest } from "http";
 import { DoorbirdStation } from "./doorbird-station.js";
 import { DoorbirdTalkback } from "./doorbird-talkback.js";
-import { DOORBIRD_TALKBACK_IDLE_TIMEOUT, LIVESTREAM_MAX_START_BACKLOG, LIVESTREAM_READY_TIMEOUT, SNAPSHOT_RETRY_DELAY, STREAM_RETRIES, STREAM_RETRY_DELAY } from "./settings.js";
+import { DOORBIRD_TALKBACK_IDLE_TIMEOUT, LIVESTREAM_MAX_START_BACKLOG, LIVESTREAM_READY_TIMEOUT, SNAPSHOT_BUFFER_CACHE, SNAPSHOT_BUFFER_MAX_AGE, SNAPSHOT_BUFFER_TIMEOUT,
+  SNAPSHOT_RETRY_DELAY, STREAM_RETRIES, STREAM_RETRY_DELAY } from "./settings.js";
+import { SnapshotSource, decodeSnapshot, snapshotSource } from "./doorbird-snapshot.js";
 import { BackpressureWriter, FfmpegOptions, isKeyframe } from "homebridge-plugin-utils";
 import { DoorbirdLivestream } from "./doorbird-livestream.js";
 import { DoorbirdRecordingDelegate } from "./doorbird-recording.js";
@@ -87,6 +89,10 @@ export class DoorbirdStreamingDelegate implements CameraStreamingDelegate {
   audioSessions: Record<string, DoorbirdAudioProxy> = {};
   private launches: Record<string, { attempts: number, command: string, videoReturnPort: number }> = {};
   private bufferSessions: Record<string, { livestream: DoorbirdLivestream, onFragment: (data: Buffer) => void, onRestart: () => void, writer: BackpressureWriter }> = {};
+
+  // The last snapshot from the livestream buffer, and a decode in progress.
+  private bufferSnapshot: { age: number, height: number, image: Buffer, time: number } | null = null;
+  private bufferSnapshotPending: { height: number, promise: Promise<Buffer | null> } | null = null;
 
   constructor(doorbird: DoorbirdStation, twoWayAudio = false, streamingOptions: StreamingDelegateOptions = { ffmpegOptions: null, livestream: null }) {
     this.api = doorbird.api;
@@ -226,13 +232,23 @@ export class DoorbirdStreamingDelegate implements CameraStreamingDelegate {
 
   // HomeKit image snapshot request handler.
   async handleSnapshotRequest(request: SnapshotRequest, callback: SnapshotRequestCallback): Promise<void> {
-    this.debug("%s: HomeKit snapshot request: %sx%s. Retrieving image from Doorbird: %s", this.name, request.width, request.height,
-      redactUrl(this.doorbird.snapshotUrl));
-
-    // Should we use night vision?
+    // Should we use night vision? We switch it on before we pick the source, so the buffer benefits as well once the infrared light is on. The light
+    // takes a moment, so the image from the buffer may still predate it; the next snapshot has it.
     if(this.doorbird.config.nightVisionSnapshot || (this.doorbird.config.nightVisionSnapshotNight && this.platform.isNight())) {
       await this.doorbird.activateNightVision();
     }
+
+    // Prefer the livestream buffer when it is running anyway: the Doorbird often refuses snapshots while it handles a ring, exactly when HomeKit wants
+    // one for the notification.
+    const image = await this.snapshotFromBuffer(request);
+
+    if(image) {
+      callback(undefined, image);
+      return;
+    }
+
+    this.debug("%s: HomeKit snapshot request: %sx%s. Retrieving image from Doorbird: %s", this.name, request.width, request.height,
+      redactUrl(this.doorbird.snapshotUrl));
 
     let response = await this.doorbird.dbApi.fetch(this.doorbird.snapshotUrl);
 
@@ -258,6 +274,67 @@ export class DoorbirdStreamingDelegate implements CameraStreamingDelegate {
       this.log.error("%s: An error occurred while making a snapshot request: %s.", this.name, message);
       callback(new Error(message));
     }
+  }
+
+  // A snapshot from the livestream buffer, or null if the buffer cannot provide one and we have to ask the Doorbird. We only use a buffer that is
+  // already running: starting it for a snapshot would open an RTSP session on the Doorbird for every refresh of a tile in the Home app.
+  private async snapshotFromBuffer(request: SnapshotRequest): Promise<Buffer | null> {
+    const livestream = this.doorbird.livestream;
+
+    // The feature option turns this off, and a custom snapshot URL is the user's explicit choice of image, so we leave it alone.
+    const decision: SnapshotSource = this.doorbird.options.includes("SNAPSHOT.BUFFER.DISABLE") ?
+      { reason: "snapshots from the buffer are disabled", source: "doorbird" } :
+      this.doorbird.config.snapshotUrl ? { reason: "a custom snapshot URL is configured", source: "doorbird" } :
+        snapshotSource(livestream, SNAPSHOT_BUFFER_MAX_AGE);
+
+    if((decision.source === "doorbird") || !livestream) {
+      this.debug("%s: Snapshot from the Doorbird: %s.", this.name, (decision.source === "doorbird") ? decision.reason : "the livestream buffer is disabled");
+      return null;
+    }
+
+    // HomeKit asks for snapshots in quick succession. Hand out a fresh one again, and share a decode that is already under way.
+    const cached = this.bufferSnapshot;
+
+    if(cached && (cached.height === request.height) && ((Date.now() - cached.time) < SNAPSHOT_BUFFER_CACHE)) {
+      this.debug("%s: Snapshot from the livestream buffer (%s ms old, cached).", this.name, Date.now() - cached.time + cached.age);
+      return cached.image;
+    }
+
+    if(!this.bufferSnapshotPending || (this.bufferSnapshotPending.height !== request.height)) {
+      const data = livestream.fromLastKeyframe();
+
+      if(!data) {
+        this.debug("%s: Snapshot from the Doorbird: the livestream buffer has no keyframe.", this.name);
+        return null;
+      }
+
+      const height = request.height;
+      const promise = decodeSnapshot({ data, ffmpeg: this.videoProcessor, height, timeout: SNAPSHOT_BUFFER_TIMEOUT }).then((image) => {
+        if(image) {
+          this.bufferSnapshot = { age: decision.age, height, image, time: Date.now() };
+        }
+
+        return image;
+      }).finally(() => {
+        if(this.bufferSnapshotPending?.promise === promise) {
+          this.bufferSnapshotPending = null;
+        }
+      });
+
+      this.bufferSnapshotPending = { height, promise };
+    }
+
+    const image = await this.bufferSnapshotPending.promise;
+
+    if(!image) {
+      this.debug("%s: Snapshot from the Doorbird: FFmpeg could not decode an image from the livestream buffer (failed or took longer than %s ms).",
+        this.name, SNAPSHOT_BUFFER_TIMEOUT);
+      return null;
+    }
+
+    this.debug("%s: Snapshot from the livestream buffer (%s ms old).", this.name, decision.age);
+
+    return image;
   }
 
   // Prepare to launch the video stream.

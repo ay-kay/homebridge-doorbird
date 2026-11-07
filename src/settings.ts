@@ -42,6 +42,12 @@ export const STREAM_RETRY_DELAY = 1500;
 // Delay before we retry a failed snapshot request.
 export const SNAPSHOT_RETRY_DELAY = 600;
 
+// Snapshots from the livestream buffer, when it is running anyway: the Doorbird often refuses its own snapshots while it handles a ring. Times in
+// milliseconds.
+export const SNAPSHOT_BUFFER_CACHE = 1000;       // A buffer snapshot younger than this is handed out again instead of decoding a new one.
+export const SNAPSHOT_BUFFER_MAX_AGE = 5000;     // We only use the buffer if its last keyframe is at most this old, else we ask the Doorbird.
+export const SNAPSHOT_BUFFER_TIMEOUT = 3000;     // How long FFmpeg may take to decode the image before we kill it and ask the Doorbird.
+
 // Audio relay: the one connection to the Doorbird's audio, served to FFmpeg locally. Times in milliseconds.
 export const AUDIO_RELAY_GAP_TOLERANCE = 300;   // How long we wait for the Doorbird before we fill the gap with silence.
 export const AUDIO_RELAY_MAX_QUEUE = 500;       // How much audio we keep queued at most; the Doorbird replays a few seconds on every reconnect.

@@ -88,6 +88,7 @@ The feature options for individual Doorbird devices can be customized using the 
 * <CODE>Audio.TwoWay.Disable</CODE> - disable two-way audio (the Talk button in the Home app) for this Doorbird.
 * <CODE>Video.Buffer.Disable</CODE> - stream the live view directly from the Doorbird instead of from the shared livestream buffer. This also disables [HomeKit Secure Video](#hksv), which records from the buffer.
 * <CODE>Video.HKSV.Disable</CODE> - do not offer [HomeKit Secure Video](#hksv) for this Doorbird.
+* <CODE>Snapshot.Buffer.Disable</CODE> - always fetch snapshots from the Doorbird. By default, while the livestream buffer is running anyway (during a live view, while HomeKit Secure Video recording is on, and for a minute after), snapshots are decoded from its video instead, because the Doorbird often refuses its own snapshots while it handles a ring. A configured `snapshotUrl` is always used as is.
 * <CODE>Motion.Ring.Disable</CODE> - do not report doorbell rings as motion. HomeKit Secure Video only records on motion, so rings are no longer recorded unless the Doorbird also detects motion.
 
 ### <A NAME="audio"></A>Audio

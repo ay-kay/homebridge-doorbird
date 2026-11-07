@@ -102,7 +102,8 @@ DoorBird, without breaking the live view, two-way audio and the relay lock that 
 ### 3.6 Configuration
 
 - Feature options (existing mechanism): `Video.HKSV.Disable`, `Video.HKSV.Copy` (experimental video copy), `Motion.Ring.Disable`
-  (do not trip motion on rings), `Video.LiveFromBuffer.Disable`. Defaults: HKSV on, transcode, rings trip motion, live from buffer.
+  (do not trip motion on rings), `Video.LiveFromBuffer.Disable`, `Snapshot.Buffer.Disable` (always fetch snapshots from the Doorbird). Defaults:
+  HKSV on, transcode, rings trip motion, live from buffer, snapshots from the buffer while it runs.
 
 ## 4. Phases
 
@@ -136,6 +137,16 @@ DoorBird, without breaking the live view, two-way audio and the relay lock that 
 - Most early HKSV ends on a healthy installation come from HomeKit itself: the hub closes the stream as slow to respond or cancelled and
   re-requests right away. The repeated-end hint therefore only blames the Doorbird's video when the end came from our side (FFmpeg exited or
   timed out, or no fragment was delivered); otherwise it points at the home hub's network connection.
+- On a ring, HomeKit asks for a snapshot for the notification exactly while the Doorbird handles the ring, and about a third of those image.cgi
+  requests failed: 503 twice in a row despite the retry, or a response so malformed that Node's HTTP parser rejects it ("Data after
+  `Connection: close`"), and the notification came without a picture. When the buffer is already running with a keyframe younger than
+  `SNAPSHOT_BUFFER_MAX_AGE`, we now decode the JPEG from it (init segment plus the fragments from the last keyframe, piped into FFmpeg,
+  killed after `SNAPSHOT_BUFFER_TIMEOUT`) and only fall back to the Doorbird otherwise. We never start the buffer for a snapshot: every
+  refresh of a Home app tile would open an RTSP session. The image is as old as the last keyframe (up to one Doorbird keyframe interval).
+- The early HKSV ends right after a ring were not the Doorbird's video failing: the buffer's video stayed fresh, but our recording FFmpeg did
+  not deliver a fragment in time (its segment timeout fired) while the Doorbird was busy. The repeated-end hint now says the recording fell
+  behind and HomeKit retries, and FFmpeg's last stderr lines, which after a timeout are mostly its output stream description, are only
+  warnings when they look like an error.
 - Error messages from node-fetch and FFmpeg command lines and output contain the stream URLs with the Doorbird credentials; everything that can
   reach the log goes through `redactUrl()`, which masks them as `scheme://<redacted>@`.
 

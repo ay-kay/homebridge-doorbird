@@ -16,6 +16,9 @@ import { redactUrl } from "./doorbird-util.js";
 // A single zero byte with isLast tells HomeKit there is nothing to record.
 const END_OF_STREAM = Buffer.alloc(1, 0);
 
+// FFmpeg output lines that look like an error rather than a description of its streams.
+const FFMPEG_ERROR_LINE = /error|invalid|fail|no frame|corrupt/i;
+
 export interface RecordingDelegateOptions {
   accessory: PlatformAccessory;
   audioSupport: boolean;
@@ -321,20 +324,32 @@ export class DoorbirdRecordingDelegate implements CameraRecordingDelegate {
       this.hap.HDSProtocolSpecificErrorReason.TIMEOUT, this.hap.HDSProtocolSpecificErrorReason.UNEXPECTED_FAILURE ];
     const endedByHomeKit = homeKitReasons.includes(reason) && !this.session.endedByUs && !timedOut && (this.session.segmentsOut > 0);
 
-    // An occasional early end is normal. A run of them means HomeKit is not getting video, usually because the buffer has none: say so instead of
-    // repeating that it can be ignored. A run of ends that HomeKit initiated points at the home hub instead.
+    // An occasional early end is normal. A run of them gets a hint at the cause instead of repeating that it can be ignored: a buffer without video,
+    // the home hub when HomeKit ended the sessions, our recording FFmpeg falling behind the buffer (it timed out, typically while the Doorbird handles
+    // a ring and the buffer's video is fine), or FFmpeg exiting.
     const videoAge = this.livestream.videoAge;
+    const repeated = "That is " + this.earlyEnds.toString() + " early ends in a row";
     const hint = (videoAge > RECORDING_VIDEO_AGE_WARNING) ?
       " The buffer has had no video from the Doorbird for " + (Number.isFinite(videoAge) ? Math.round(videoAge / 1000).toString() + " seconds." : "a while.") :
       (this.earlyEnds < RECORDING_EARLY_END_WARNING) ? " This happens occasionally and can be ignored." :
-        endedByHomeKit ? " That is " + this.earlyEnds.toString() + " early ends in a row from HomeKit. If it keeps happening, check the home hub's network connection." :
-          " That is " + this.earlyEnds.toString() + " early ends in a row, check the Doorbird's video.";
+        endedByHomeKit ? " " + repeated + " from HomeKit. If it keeps happening, check the home hub's network connection." :
+          timedOut ? " " + repeated + ": the recording fell behind the Doorbird's video, which often happens while the Doorbird handles a ring. HomeKit " +
+            "retries on its own." :
+            " " + repeated + ", FFmpeg stopped delivering video.";
 
     this.log.warn("%s: HKSV recording event ended early after %s seconds: %s%s", this.name, Math.round(seconds),
       descriptions[reason] ?? ("reason " + reason.toString() + "."), hint);
 
+    // After a timeout, FFmpeg's last lines are usually just the description of its output stream (encoder, handler_name, side data). Only lines that
+    // look like an error are worth a warning.
     if(timedOut || this.verbose) {
-      stderr.slice(-5).forEach((line) => this.log.warn("%s: ffmpeg: %s", this.name, redactUrl(line)));
+      for(const line of stderr.slice(-5)) {
+        if(FFMPEG_ERROR_LINE.test(line)) {
+          this.log.warn("%s: ffmpeg: %s", this.name, redactUrl(line));
+        } else {
+          this.debug("%s: ffmpeg: %s", this.name, redactUrl(line));
+        }
+      }
     }
   }
 
